@@ -1,16 +1,16 @@
 use crate::ast::{self, Expr, LitVal};
-use crate::scanner::token::{self, TokenType::*};
+use crate::scanner::token::{
+    self,
+    TokenType::{self, *},
+};
 use crate::span::{self, Span};
 
-// Refacotr and implement parse as macro and use pattern match instead of static
+// Refactor and implement parse as macro and use pattern match instead of static
 static EQ_TOKEN_TYPES: &[token::TokenType] = &[EqualEqual, BangEqual];
 static CMP_TOKEN_TYPES: &[token::TokenType] = &[Greater, GreaterEqual, Less, LessEqual];
 static TERM_TOKEN_TYPES: &[token::TokenType] = &[Plus, Minus];
 static FACTOR_TOKEN_TYPES: &[token::TokenType] = &[Slash, Star];
 static UNARY_TOKEN_TYPES: &[token::TokenType] = &[Bang, Minus];
-
-// TODO:
-// panic handling and synchronization
 
 #[derive(Debug)]
 pub struct ParseError {
@@ -24,29 +24,88 @@ impl ParseError {
     }
 }
 
+impl std::fmt::Display for ParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.token_opt {
+            Some(t) => write!(f, "token: {}, msg: {}", t, self.msg),
+            None => write!(f, "msg: {}", self.msg),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct RecursiveDescentParser {
     current: usize,
 }
 
-// TODO: Global Variables in book
 impl RecursiveDescentParser {
     pub fn new() -> Self {
         Self { current: 0 }
     }
 
-    // TODO: this should return vec of Expr or parse result
     pub fn parse(&mut self, tokens: &Vec<token::Token>) -> Result<Vec<ast::Stmt>, ParseError> {
         let mut statements = Vec::new();
 
-        while let Some(_) = self.peek_current(tokens) {
-            statements.push(self.statement(tokens)?);
+        while let Some(t) = self.peek_current(tokens) {
+            match self.declaration(tokens) {
+                Ok(t) => statements.push(t),
+                Err(e) => {
+                    // TODO: what should be returned to the cli on parse error?
+                    self.synchronize(tokens);
+                    println!("{}", e);
+                }
+            }
         }
 
         Ok(statements)
     }
 
-    // TODO: what should these now return?
+    fn declaration(&mut self, tokens: &Vec<token::Token>) -> Result<ast::Stmt, ParseError> {
+        match self.peek_current(tokens) {
+            Some(t) if t.token_type == TokenType::Var => {
+                self.advance(tokens);
+                self.var_declaration(tokens)
+            }
+            _ => self.statement(tokens),
+        }
+    }
+
+    fn var_declaration(&mut self, tokens: &Vec<token::Token>) -> Result<ast::Stmt, ParseError> {
+        self.advance(tokens)
+            .map_or(
+                Err(ParseError::new(None, "Expect token, got EOF")),
+                |t| match &t.token_type {
+                    TokenType::Identifier(name) => {
+                        let initializer = match self.peek_current(tokens) {
+                            Some(t) if t.token_type == TokenType::Equal => {
+                                self.advance(tokens);
+                                Some(self.expression(tokens)?)
+                            }
+                            _ => None,
+                        };
+
+                        match self.advance(tokens) {
+                            Some(t) if t.token_type == TokenType::Semicolon => Ok(ast::Stmt::Var {
+                                name: name.clone(),
+                                initializer: initializer,
+                                span: span::Span::new(t.clone()),
+                            }),
+                            Some(t) => Err(ParseError::new(
+                                Some(t.clone()),
+                                "Expect ';' after variable declaration",
+                            )),
+                            _ => Err(ParseError::new(
+                                None,
+                                "Expect ';' after variable declaration, got EOF",
+                            )),
+                        }
+                    }
+
+                    _ => return Err(ParseError::new(Some(t.clone()), "Expect variable name")),
+                },
+            )
+    }
+
     fn statement(&mut self, tokens: &Vec<token::Token>) -> Result<ast::Stmt, ParseError> {
         match self.peek_current(tokens) {
             Some(t) if matches!(t.token_type, token::TokenType::Print) => {
@@ -56,11 +115,44 @@ impl RecursiveDescentParser {
                     span: span::Span::new(t.clone()),
                 })
             }
+            Some(t) if matches!(t.token_type, token::TokenType::LeftBrace) => {
+                self.advance(tokens);
+                Ok(ast::Stmt::Block {
+                    statements: self.block(tokens)?,
+                    span: span::Span::new(t.clone()),
+                })
+            }
             Some(t) => Ok(ast::Stmt::ExprStmt {
                 inner: self.expression_statement(tokens)?,
                 span: span::Span::new(t.clone()),
             }),
             None => panic!("tried to consume token with no more tokens available."),
+        }
+    }
+    fn block(&mut self, tokens: &Vec<token::Token>) -> Result<Vec<ast::Stmt>, ParseError> {
+        let mut statements = vec![];
+
+        while let Some(_) = self
+            .peek_current(tokens)
+            .map(|token| match token {
+                t if t.token_type == token::TokenType::RightBrace => None,
+                t => Some(t),
+            })
+            .flatten()
+        {
+            statements.push(self.declaration(tokens)?);
+        }
+
+        match self.advance(tokens) {
+            Some(t) if t.token_type == token::TokenType::RightBrace => Ok(statements),
+            Some(t) => Err(ParseError::new(
+                Some(t.clone()),
+                "Expect '}' after block, got different token",
+            )),
+            _ => Err(ParseError::new(
+                None,
+                "Expect '}' after block, reached EOF.",
+            )),
         }
     }
 
@@ -99,7 +191,32 @@ impl RecursiveDescentParser {
     }
 
     fn expression(&mut self, tokens: &Vec<token::Token>) -> Result<ast::Expr, ParseError> {
-        Self::equality(self, tokens)
+        self.assignment(tokens)
+    }
+
+    fn assignment(&mut self, tokens: &Vec<token::Token>) -> Result<ast::Expr, ParseError> {
+        let expr = self.equality(tokens)?;
+
+        self.peek_current(tokens).map_or(Ok(expr.clone()), |t| {
+            if t.token_type == TokenType::Equal {
+                self.advance(tokens);
+                let r_value = self.assignment(tokens)?;
+
+                match expr {
+                    Expr::Variable { name, span } => Ok(Expr::Assign {
+                        name: name,
+                        value: Box::new(r_value),
+                        span: span,
+                    }),
+                    _ => Err(ParseError::new(
+                        Some(t.clone()),
+                        "Invalid assignment target.",
+                    )),
+                }
+            } else {
+                Ok(expr)
+            }
+        })
     }
 
     fn equality(&mut self, tokens: &Vec<token::Token>) -> Result<ast::Expr, ParseError> {
@@ -169,6 +286,10 @@ impl RecursiveDescentParser {
                 }),
                 Number(val) => Ok(Expr::Literal {
                     inner: LitVal::Number(*val),
+                    span: Span::new(token.clone()),
+                }),
+                Identifier(name) => Ok(Expr::Variable {
+                    name: name.clone(),
                     span: Span::new(token.clone()),
                 }),
                 LeftParen => {
@@ -266,15 +387,6 @@ impl RecursiveDescentParser {
         }
     }
 
-    /// Returns the token at index (self.current - 1)
-    fn previous<'a>(&self, tokens: &'a Vec<token::Token>) -> Option<&'a token::Token> {
-        if self.current > 0 {
-            Some(&tokens[self.current - 1])
-        } else {
-            None
-        }
-    }
-
     /// `synchronize` should be called after a [`ParseError`]. It will consume any remaining tokens
     /// within the current statement and advance the current index to the start of the next
     /// statement.
@@ -301,4 +413,9 @@ fn match_token_types(token_types: &[token::TokenType], token: &token::Token) -> 
         }
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    fn test_parse() {}
 }

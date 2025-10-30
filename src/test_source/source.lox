@@ -1,0 +1,14 @@
+{ var a = 3; }
+
+print a;
+
+a = 4;
+
+print a;
+
+var b = a;
+
+a = 6;
+
+print a;
+

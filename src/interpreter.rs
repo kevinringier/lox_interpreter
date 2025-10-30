@@ -1,9 +1,10 @@
 use crate::{
     ast::{self, ExprVisitor, StmtVisitor},
+    environment::{self, Environment},
     span,
 };
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum Value {
     // Object do we need an object?
     Bool(bool),
@@ -33,6 +34,12 @@ impl Value {
     }
 }
 
+impl std::fmt::Display for Value {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.stringify())
+    }
+}
+
 impl PartialEq for Value {
     fn eq(&self, other: &Self) -> bool {
         use Value::*;
@@ -57,9 +64,14 @@ impl Eq for Value {}
 
 #[derive(Debug)]
 pub struct RuntimeError {
-    // TODO: add error reporting msg
     span: span::Span,
     msg: String,
+}
+
+impl std::fmt::Display for RuntimeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "RuntimeError: {}, span_info: {}", self.msg, self.span)
+    }
 }
 
 impl RuntimeError {
@@ -68,58 +80,112 @@ impl RuntimeError {
     }
 }
 
-pub struct Interpreter;
+pub struct Interpreter {
+    env: environment::Environment<Value>,
+}
 
-type InterpreterResult = Result<Value, RuntimeError>;
-
-impl Interpreter {
+impl<'a> Interpreter {
     pub fn new() -> Self {
-        Self {}
+        Self {
+            env: Environment::new(),
+        }
     }
 
-    pub fn interpret(&self, stmts: &Vec<ast::Stmt>) -> Result<(), RuntimeError> {
-        for stmt in stmts {
+    pub fn interpret(&mut self, statements: &Vec<ast::Stmt>) -> Result<(), RuntimeError> {
+        for stmt in statements {
             self.execute(stmt)?;
         }
 
         Ok(())
     }
 
-    fn execute(&self, stmt: &ast::Stmt) -> Result<(), RuntimeError> {
-        self.visit_stmt(stmt)
+    fn execute(&mut self, statement: &ast::Stmt) -> Result<(), RuntimeError> {
+        self.visit_stmt(statement)
     }
 
-    fn evaluate(&self, expr: &ast::Expr) -> Result<Value, RuntimeError> {
+    fn execute_block(&mut self, statements: &Vec<ast::Stmt>) -> Result<(), RuntimeError> {
+        let prev_env = std::mem::replace(&mut self.env, Environment::new());
+        self.env.set_enclosing_env(prev_env);
+
+        for stmt in statements {
+            self.execute(stmt)?;
+        }
+
+        // TODO: if we encounter error in executing statements, we will preempt
+        // resetting the env to the parent. We should just exit.
+        self.env = self.env.get_enclosing_env();
+
+        Ok(())
+    }
+
+    fn evaluate(&mut self, expr: &ast::Expr) -> Result<Value, RuntimeError> {
         self.visit_expr(expr)
     }
 }
 
 impl StmtVisitor<Result<(), RuntimeError>> for Interpreter {
-    fn visit_expr_stmt(&self, expr: &ast::Expr, span: &span::Span) -> Result<(), RuntimeError> {
-        // TODO: should I wrap runtime error with span info?
+    fn visit_block_stmt(
+        &mut self,
+        statements: &Vec<ast::Stmt>,
+        span: &span::Span,
+    ) -> Result<(), RuntimeError> {
+        self.execute_block(statements)
+    }
+
+    fn visit_expr_stmt(&mut self, expr: &ast::Expr, _: &span::Span) -> Result<(), RuntimeError> {
         self.evaluate(expr)?;
         Ok(())
     }
 
-    fn visit_print_stmt(&self, expr: &ast::Expr, span: &span::Span) -> Result<(), RuntimeError> {
-        // TODO: should I wrap runtime error with span info?
+    fn visit_print_stmt(&mut self, expr: &ast::Expr, _: &span::Span) -> Result<(), RuntimeError> {
         let value = self.evaluate(expr)?;
         println!("{}", value.stringify());
         Ok(())
     }
+
+    fn visit_var_stmt(
+        &mut self,
+        name: &String,
+        initializer: &Option<ast::Expr>,
+        _: &span::Span,
+    ) -> Result<(), RuntimeError> {
+        let init_val = match initializer {
+            Some(e) => self.evaluate(e)?,
+            None => Value::Nil,
+        };
+
+        Ok(self.env.define(name.clone(), init_val))
+    }
 }
 
 impl ExprVisitor<Result<Value, RuntimeError>> for Interpreter {
-    fn visit_grouping(
-        &self,
-        expr: &Box<ast::Expr>,
+    fn visit_assignment(
+        &mut self,
+        name: &String,
+        value_expr: &Box<ast::Expr>,
         span: &span::Span,
+    ) -> Result<Value, RuntimeError> {
+        let r_value = self.evaluate(value_expr)?;
+
+        match self.env.assign(name.clone(), r_value.clone()) {
+            Ok(()) => Ok(r_value),
+            Err(_) => Err(RuntimeError::new(
+                span.clone(),
+                format!("Undefined variable '{}'.", name),
+            )),
+        }
+    }
+
+    fn visit_grouping(
+        &mut self,
+        expr: &Box<ast::Expr>,
+        _: &span::Span,
     ) -> Result<Value, RuntimeError> {
         self.visit_expr(expr)
     }
 
     fn visit_binary(
-        &self,
+        &mut self,
         bin_op: &ast::BinOp,
         lhs: &Box<ast::Expr>,
         rhs: &Box<ast::Expr>,
@@ -128,16 +194,18 @@ impl ExprVisitor<Result<Value, RuntimeError>> for Interpreter {
         let (lhs_val, rhs_val) = match (self.visit_expr(lhs), self.visit_expr(rhs)) {
             (Err(lhs_e), Err(rhs_e)) => Err(RuntimeError::new(
                 span.clone(),
-                // TODO:
-                format!("bin_op left and right operand error, left error: , right error: "),
+                format!(
+                    "bin_op left and right operand error, left error: {}, right error: {}",
+                    lhs_e, rhs_e
+                ),
             )),
             (Err(lhs_e), _) => Err(RuntimeError::new(
                 span.clone(),
-                format!("bin_op left operand error"),
+                format!("bin_op left operand error: {}", lhs_e),
             )),
             (_, Err(rhs_e)) => Err(RuntimeError::new(
                 span.clone(),
-                format!("bin_op right operand error"),
+                format!("bin_op right operand error: {}", rhs_e),
             )),
             (Ok(lhs_val), Ok(rhs_val)) => Ok((lhs_val, rhs_val)),
         }?;
@@ -161,32 +229,22 @@ impl ExprVisitor<Result<Value, RuntimeError>> for Interpreter {
                 Err(RuntimeError::new(
                     span.clone(),
                     format!(
-                        "operands must be numeric, left operand: {:?}, right operand: {:?}",
+                        "operands must be numeric, left operand: {}, right operand: {}",
                         l, r
                     ),
                 ))
             }
-            // operands must strings or numeric
             (Add, l, r) => Err(RuntimeError::new(
-                // TODO: add types of lhs_val and rhs_val in error msg
                 span.clone(),
                 format!(
-                    "operands must be numeric or strings, left operand: {:?}, right operand: {:?}",
+                    "operands must be numeric or strings, left operand: {}, right operand: {}",
                     l, r
-                ),
-            )),
-            // TODO: why unreachable
-            (op, l, r) => Err(RuntimeError::new(
-                span.clone(),
-                format!(
-                    "runtime error with op: {:?}, left operand: {:?}, right operand: {:?}",
-                    op, l, r
                 ),
             )),
         }
     }
 
-    fn visit_literal(&self, l: &ast::LitVal, span: &span::Span) -> Result<Value, RuntimeError> {
+    fn visit_literal(&mut self, l: &ast::LitVal, _: &span::Span) -> Result<Value, RuntimeError> {
         use Value::*;
         use ast::LitVal;
         Ok(match l {
@@ -199,7 +257,7 @@ impl ExprVisitor<Result<Value, RuntimeError>> for Interpreter {
     }
 
     fn visit_unary(
-        &self,
+        &mut self,
         un_op: &ast::UnOp,
         rhs: &Box<ast::Expr>,
         span: &span::Span,
@@ -217,4 +275,20 @@ impl ExprVisitor<Result<Value, RuntimeError>> for Interpreter {
             )),
         }
     }
+
+    fn visit_variable(&mut self, name: &String, span: &span::Span) -> Result<Value, RuntimeError> {
+        match self.env.get(name) {
+            Some(v) => Ok(v.clone()),
+            None => Err(RuntimeError::new(
+                span.clone(),
+                format!("Undefined variable '{}'.", name),
+            )),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_visit_unary() {}
 }

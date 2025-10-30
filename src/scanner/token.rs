@@ -54,25 +54,25 @@ pub enum TokenType {
 impl TokenType {
     fn to_string(&self) -> &str {
         match self {
-            TokenType::LeftParen => ")",
-            TokenType::RightParen => "(",
-            TokenType::LeftBrace => "{",
-            TokenType::RightBrace => "}",
-            TokenType::Comma => ",",
-            TokenType::Dot => ".",
-            TokenType::Minus => "-",
-            TokenType::Plus => "+",
-            TokenType::Semicolon => ";",
-            TokenType::Slash => "/",
-            TokenType::Star => "*",
-            TokenType::Bang => "!",
-            TokenType::BangEqual => "!=",
-            TokenType::Equal => "=",
-            TokenType::EqualEqual => "==",
-            TokenType::Greater => ">",
-            TokenType::GreaterEqual => ">=",
-            TokenType::Less => "<",
-            TokenType::LessEqual => "<=",
+            TokenType::LeftParen => "left_paren",
+            TokenType::RightParen => "right_paren",
+            TokenType::LeftBrace => "left_brace",
+            TokenType::RightBrace => "right_brace",
+            TokenType::Comma => "comma",
+            TokenType::Dot => "dot",
+            TokenType::Minus => "minus",
+            TokenType::Plus => "plus",
+            TokenType::Semicolon => "semicolon",
+            TokenType::Slash => "slash",
+            TokenType::Star => "star",
+            TokenType::Bang => "bang",
+            TokenType::BangEqual => "bang_equal",
+            TokenType::Equal => "equal",
+            TokenType::EqualEqual => "equal_equal",
+            TokenType::Greater => "greater_than",
+            TokenType::GreaterEqual => "greater_than_equal",
+            TokenType::Less => "less_than",
+            TokenType::LessEqual => "greater_than_equal",
             TokenType::Identifier(_) => "identifier",
             TokenType::String(_) => "string",
             TokenType::Number(_) => "number",
@@ -97,11 +97,17 @@ impl TokenType {
     }
 }
 
+impl std::fmt::Display for TokenType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.to_string())
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Token {
     pub token_type: TokenType,
-    lexeme: String,
-    line: usize,
+    pub lexeme: String,
+    pub line: usize,
 }
 
 impl Token {
@@ -116,19 +122,19 @@ impl Token {
     fn to_string(&self) -> String {
         match &self.token_type {
             TokenType::String(literal) => format!(
-                "type {} lexeme {} {}",
+                "type: {}, lexeme: '{}', line: {}",
                 self.token_type.to_string(),
                 self.lexeme,
                 literal
             ),
             TokenType::Number(literal) => format!(
-                "type {} lexeme {} {}",
+                "type: {}, lexeme: '{}', line: {}",
                 self.token_type.to_string(),
                 self.lexeme,
                 literal
             ),
             _ => format!(
-                "type {} lexeme {}",
+                "type: {}, lexeme: '{}'",
                 self.token_type.to_string(),
                 self.lexeme
             ),
