@@ -30,6 +30,12 @@ pub enum Stmt {
         inner: Expr,
         span: span::Span,
     },
+    If {
+        condition: Expr,
+        then: Box<Stmt>,
+        else_branch: Option<Box<Stmt>>,
+        span: span::Span,
+    },
     Print {
         rhs: Expr,
         span: span::Span,
@@ -39,6 +45,25 @@ pub enum Stmt {
         initializer: Option<Expr>,
         span: span::Span,
     },
+    While {
+        condition: Expr,
+        body: Box<Stmt>,
+        span: span::Span,
+    },
+}
+
+impl Stmt {
+    pub fn get_span(&self) -> &span::Span {
+        use Stmt::*;
+        match self {
+            Block { span, .. } => span,
+            ExprStmt { span, .. } => span,
+            If { span, .. } => span,
+            Print { span, .. } => span,
+            Var { span, .. } => span,
+            While { span, .. } => span,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -46,15 +71,6 @@ pub enum Expr {
     Assign {
         name: String,
         value: Box<Expr>,
-        span: span::Span,
-    },
-    Literal {
-        inner: LitVal,
-        span: span::Span,
-    },
-    Unary {
-        op: UnOp,
-        rhs: Box<Expr>,
         span: span::Span,
     },
     Binary {
@@ -65,6 +81,25 @@ pub enum Expr {
     },
     Grouping {
         expr: Box<Expr>,
+        span: span::Span,
+    },
+    Literal {
+        inner: LitVal,
+        span: span::Span,
+    },
+    LogicAnd {
+        left: Box<Expr>,
+        right: Box<Expr>,
+        span: span::Span,
+    },
+    LogicOr {
+        left: Box<Expr>,
+        right: Box<Expr>,
+        span: span::Span,
+    },
+    Unary {
+        op: UnOp,
+        rhs: Box<Expr>,
         span: span::Span,
     },
     Variable {
@@ -131,27 +166,53 @@ impl BinOp {
 }
 
 pub trait StmtVisitor<T> {
-    fn visit_stmt(&mut self, s: &Stmt) -> T {
+    fn visit_statement(&mut self, s: &Stmt) -> T {
         use Stmt::*;
         match s {
-            Block { statements, span } => self.visit_block_stmt(statements, span),
-            ExprStmt { inner, span } => self.visit_expr_stmt(inner, span),
-            Print { rhs, span } => self.visit_print_stmt(rhs, span),
+            Block { statements, span } => self.visit_block_statement(statements, span),
+            ExprStmt { inner, span } => self.visit_expr_statement(inner, span),
+            If {
+                condition,
+                then,
+                else_branch,
+                span,
+            } => self.visit_if_statement(condition, then, else_branch, span),
+            Print { rhs, span } => self.visit_print_statement(rhs, span),
             Var {
                 name,
                 initializer,
                 span,
-            } => self.visit_var_stmt(name, initializer, span),
+            } => self.visit_var_statement(name, initializer, span),
+            While {
+                condition,
+                body,
+                span,
+            } => self.visit_while_statement(condition, body, span),
         }
     }
 
-    fn visit_block_stmt(&mut self, statements: &Vec<Stmt>, span: &span::Span) -> T;
+    fn visit_block_statement(&mut self, statements: &Vec<Stmt>, span: &span::Span) -> T;
 
-    fn visit_expr_stmt(&mut self, expr: &Expr, span: &span::Span) -> T;
+    fn visit_expr_statement(&mut self, expr: &Expr, span: &span::Span) -> T;
 
-    fn visit_print_stmt(&mut self, expr: &Expr, span: &span::Span) -> T;
+    fn visit_if_statement(
+        &mut self,
+        condition: &Expr,
+        then: &Box<Stmt>,
+        else_branch: &Option<Box<Stmt>>,
+        span: &span::Span,
+    ) -> T;
 
-    fn visit_var_stmt(&mut self, name: &String, initializer: &Option<Expr>, span: &span::Span)
+    fn visit_print_statement(&mut self, expr: &Expr, span: &span::Span) -> T;
+
+    fn visit_var_statement(
+        &mut self,
+        name: &String,
+        initializer: &Option<Expr>,
+        span: &span::Span,
+    ) -> T;
+
+    fn visit_while_statement(&mut self, condition: &Expr, body: &Box<Stmt>, span: &span::Span)
     -> T;
 }
 
@@ -160,17 +221,17 @@ pub trait ExprVisitor<T> {
         use Expr::*;
         match e {
             Assign { name, value, span } => self.visit_assignment(name, value, span),
-            Literal { inner, span } => self.visit_literal(inner, span),
-            Unary { op, rhs, span } => self.visit_unary(op, rhs, span),
             Binary { op, lhs, rhs, span } => self.visit_binary(op, lhs, rhs, span),
             Grouping { expr, span } => self.visit_grouping(expr, span),
+            Literal { inner, span } => self.visit_literal(inner, span),
+            LogicAnd { left, right, span } => self.visit_logic_and(left, right, span),
+            LogicOr { left, right, span } => self.visit_logic_or(left, right, span),
+            Unary { op, rhs, span } => self.visit_unary(op, rhs, span),
             Variable { name, span } => self.visit_variable(name, span),
         }
     }
 
     fn visit_assignment(&mut self, name: &String, value: &Box<Expr>, span: &span::Span) -> T;
-
-    fn visit_grouping(&mut self, expr: &Box<Expr>, span: &span::Span) -> T;
 
     fn visit_binary(
         &mut self,
@@ -180,12 +241,16 @@ pub trait ExprVisitor<T> {
         span: &span::Span,
     ) -> T;
 
+    fn visit_grouping(&mut self, expr: &Box<Expr>, span: &span::Span) -> T;
+
     fn visit_literal(&mut self, l: &LitVal, span: &span::Span) -> T;
+
+    fn visit_logic_and(&mut self, lhs: &Box<Expr>, rhs: &Box<Expr>, span: &span::Span) -> T;
+
+    fn visit_logic_or(&mut self, lhs: &Box<Expr>, rhs: &Box<Expr>, span: &span::Span) -> T;
 
     fn visit_unary(&mut self, un_op: &UnOp, rhs: &Box<Expr>, span: &span::Span) -> T;
 
-    // TODO: if we want to parenthesize the evaluated variable, we need to add a type constraint
-    // for an environment interface
     fn visit_variable(&mut self, name: &String, span: &span::Span) -> T;
 }
 
@@ -198,7 +263,7 @@ impl AstPrinter {
 
     pub fn print(&mut self, stmts: &Vec<Stmt>) {
         for stmt in stmts {
-            println!("{}", self.visit_stmt(stmt));
+            println!("{}", self.visit_statement(stmt));
         }
     }
 
@@ -220,13 +285,13 @@ impl AstPrinter {
 }
 
 impl StmtVisitor<String> for AstPrinter {
-    fn visit_block_stmt(&mut self, statements: &Vec<Stmt>, _: &span::Span) -> String {
+    fn visit_block_statement(&mut self, statements: &Vec<Stmt>, _: &span::Span) -> String {
         let mut result = String::new();
 
         result.push_str("(block");
 
         for stmt in statements {
-            let e: &str = &(self.visit_stmt(stmt));
+            let e: &str = &(self.visit_statement(stmt));
 
             result.push_str(&format!(" {}", e));
         }
@@ -236,15 +301,26 @@ impl StmtVisitor<String> for AstPrinter {
         result
     }
 
-    fn visit_expr_stmt(&mut self, expr: &Expr, _: &span::Span) -> String {
+    fn visit_expr_statement(&mut self, expr: &Expr, _: &span::Span) -> String {
         self.parenthesize("expression statement", vec![expr])
     }
 
-    fn visit_print_stmt(&mut self, expr: &Expr, _: &span::Span) -> String {
+    fn visit_if_statement(
+        &mut self,
+        condition: &Expr,
+        then: &Box<Stmt>,
+        else_branch: &Option<Box<Stmt>>,
+        span: &span::Span,
+    ) -> String {
+        //self.parenthesize("if ", exprs)
+        String::from("if") // TODO:
+    }
+
+    fn visit_print_statement(&mut self, expr: &Expr, _: &span::Span) -> String {
         self.parenthesize("print", vec![expr])
     }
 
-    fn visit_var_stmt(
+    fn visit_var_statement(
         &mut self,
         name: &String,
         initializer: &Option<Expr>,
@@ -258,15 +334,20 @@ impl StmtVisitor<String> for AstPrinter {
         // TODO: do we want to print evaluated value?
         self.parenthesize(format!("var statement: {}", name).as_str(), exprs)
     }
+
+    fn visit_while_statement(
+        &mut self,
+        condition: &Expr,
+        body: &Box<Stmt>,
+        span: &span::Span,
+    ) -> String {
+        "while".to_string()
+    }
 }
 
 impl ExprVisitor<String> for AstPrinter {
     fn visit_assignment(&mut self, name: &String, value: &Box<Expr>, _: &span::Span) -> String {
         self.parenthesize(format!("assignment: {}", name).as_str(), vec![value])
-    }
-
-    fn visit_grouping(&mut self, expr: &Box<Expr>, _: &span::Span) -> String {
-        self.parenthesize("group", vec![expr])
     }
 
     fn visit_binary(
@@ -279,6 +360,10 @@ impl ExprVisitor<String> for AstPrinter {
         self.parenthesize(bin_op.to_string(), vec![lhs, rhs])
     }
 
+    fn visit_grouping(&mut self, expr: &Box<Expr>, _: &span::Span) -> String {
+        self.parenthesize("group", vec![expr])
+    }
+
     fn visit_literal(&mut self, l: &LitVal, _: &span::Span) -> String {
         match l {
             LitVal::Number(n) => format!("{}", n),
@@ -287,6 +372,14 @@ impl ExprVisitor<String> for AstPrinter {
             LitVal::False => format!("false"),
             LitVal::Nil => format!("nil"),
         }
+    }
+
+    fn visit_logic_and(&mut self, lhs: &Box<Expr>, rhs: &Box<Expr>, _: &span::Span) -> String {
+        self.parenthesize("and", vec![lhs, rhs])
+    }
+
+    fn visit_logic_or(&mut self, lhs: &Box<Expr>, rhs: &Box<Expr>, _: &span::Span) -> String {
+        self.parenthesize("or", vec![lhs, rhs])
     }
 
     fn visit_unary(&mut self, un_op: &UnOp, rhs: &Box<Expr>, _: &span::Span) -> String {

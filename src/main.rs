@@ -8,6 +8,7 @@ mod span;
 
 use std::process;
 
+// TODO: functions
 fn main() -> process::ExitCode {
     let args: Vec<String> = std::env::args().collect();
 

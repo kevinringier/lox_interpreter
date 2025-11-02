@@ -100,7 +100,7 @@ impl<'a> Interpreter {
     }
 
     fn execute(&mut self, statement: &ast::Stmt) -> Result<(), RuntimeError> {
-        self.visit_stmt(statement)
+        self.visit_statement(statement)
     }
 
     fn execute_block(&mut self, statements: &Vec<ast::Stmt>) -> Result<(), RuntimeError> {
@@ -124,26 +124,50 @@ impl<'a> Interpreter {
 }
 
 impl StmtVisitor<Result<(), RuntimeError>> for Interpreter {
-    fn visit_block_stmt(
+    fn visit_block_statement(
         &mut self,
         statements: &Vec<ast::Stmt>,
-        span: &span::Span,
+        _: &span::Span,
     ) -> Result<(), RuntimeError> {
         self.execute_block(statements)
     }
 
-    fn visit_expr_stmt(&mut self, expr: &ast::Expr, _: &span::Span) -> Result<(), RuntimeError> {
+    fn visit_expr_statement(
+        &mut self,
+        expr: &ast::Expr,
+        _: &span::Span,
+    ) -> Result<(), RuntimeError> {
         self.evaluate(expr)?;
         Ok(())
     }
 
-    fn visit_print_stmt(&mut self, expr: &ast::Expr, _: &span::Span) -> Result<(), RuntimeError> {
+    fn visit_if_statement(
+        &mut self,
+        condition: &ast::Expr,
+        then: &Box<ast::Stmt>,
+        else_branch: &Option<Box<ast::Stmt>>,
+        _: &span::Span,
+    ) -> Result<(), RuntimeError> {
+        if self.evaluate(condition)?.is_truthy() {
+            self.execute(then)?;
+        } else if let Some(else_branch) = else_branch {
+            self.execute(else_branch)?;
+        }
+
+        Ok(())
+    }
+
+    fn visit_print_statement(
+        &mut self,
+        expr: &ast::Expr,
+        _: &span::Span,
+    ) -> Result<(), RuntimeError> {
         let value = self.evaluate(expr)?;
         println!("{}", value.stringify());
         Ok(())
     }
 
-    fn visit_var_stmt(
+    fn visit_var_statement(
         &mut self,
         name: &String,
         initializer: &Option<ast::Expr>,
@@ -155,6 +179,19 @@ impl StmtVisitor<Result<(), RuntimeError>> for Interpreter {
         };
 
         Ok(self.env.define(name.clone(), init_val))
+    }
+
+    fn visit_while_statement(
+        &mut self,
+        condition: &ast::Expr,
+        body: &Box<ast::Stmt>,
+        _: &span::Span,
+    ) -> Result<(), RuntimeError> {
+        while self.evaluate(condition)?.is_truthy() {
+            self.execute(body)?;
+        }
+
+        Ok(())
     }
 }
 
@@ -174,14 +211,6 @@ impl ExprVisitor<Result<Value, RuntimeError>> for Interpreter {
                 format!("Undefined variable '{}'.", name),
             )),
         }
-    }
-
-    fn visit_grouping(
-        &mut self,
-        expr: &Box<ast::Expr>,
-        _: &span::Span,
-    ) -> Result<Value, RuntimeError> {
-        self.visit_expr(expr)
     }
 
     fn visit_binary(
@@ -244,6 +273,14 @@ impl ExprVisitor<Result<Value, RuntimeError>> for Interpreter {
         }
     }
 
+    fn visit_grouping(
+        &mut self,
+        expr: &Box<ast::Expr>,
+        _: &span::Span,
+    ) -> Result<Value, RuntimeError> {
+        self.visit_expr(expr)
+    }
+
     fn visit_literal(&mut self, l: &ast::LitVal, _: &span::Span) -> Result<Value, RuntimeError> {
         use Value::*;
         use ast::LitVal;
@@ -254,6 +291,36 @@ impl ExprVisitor<Result<Value, RuntimeError>> for Interpreter {
             LitVal::False => Bool(false),
             LitVal::Nil => Nil,
         })
+    }
+
+    fn visit_logic_and(
+        &mut self,
+        lhs: &Box<ast::Expr>,
+        rhs: &Box<ast::Expr>,
+        _: &span::Span,
+    ) -> Result<Value, RuntimeError> {
+        let left = self.evaluate(lhs)?;
+
+        if !left.is_truthy() {
+            Ok(left)
+        } else {
+            Ok(self.evaluate(rhs)?)
+        }
+    }
+
+    fn visit_logic_or(
+        &mut self,
+        lhs: &Box<ast::Expr>,
+        rhs: &Box<ast::Expr>,
+        _: &span::Span,
+    ) -> Result<Value, RuntimeError> {
+        let left = self.evaluate(lhs)?;
+
+        if left.is_truthy() {
+            Ok(left)
+        } else {
+            Ok(self.evaluate(rhs)?)
+        }
     }
 
     fn visit_unary(

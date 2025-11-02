@@ -50,7 +50,7 @@ impl RecursiveDescentParser {
             match self.declaration(tokens) {
                 Ok(t) => statements.push(t),
                 Err(e) => {
-                    // TODO: what should be returned to the cli on parse error?
+                    // FIX: collect all errors and return error type
                     self.synchronize(tokens);
                     println!("{}", e);
                 }
@@ -62,15 +62,15 @@ impl RecursiveDescentParser {
 
     fn declaration(&mut self, tokens: &Vec<token::Token>) -> Result<ast::Stmt, ParseError> {
         match self.peek_current(tokens) {
-            Some(t) if t.token_type == TokenType::Var => {
-                self.advance(tokens);
-                self.var_declaration(tokens)
-            }
+            Some(t) if t.token_type == TokenType::Var => self.var_declaration(tokens),
             _ => self.statement(tokens),
         }
     }
 
     fn var_declaration(&mut self, tokens: &Vec<token::Token>) -> Result<ast::Stmt, ParseError> {
+        let span =
+            span::Span::new(self.consume(token::TokenType::Var, tokens, "Expect 'var' token")?);
+
         self.advance(tokens)
             .map_or(
                 Err(ParseError::new(None, "Expect token, got EOF")),
@@ -88,7 +88,7 @@ impl RecursiveDescentParser {
                             Some(t) if t.token_type == TokenType::Semicolon => Ok(ast::Stmt::Var {
                                 name: name.clone(),
                                 initializer: initializer,
-                                span: span::Span::new(t.clone()),
+                                span: span,
                             }),
                             Some(t) => Err(ParseError::new(
                                 Some(t.clone()),
@@ -122,13 +122,179 @@ impl RecursiveDescentParser {
                     span: span::Span::new(t.clone()),
                 })
             }
-            Some(t) => Ok(ast::Stmt::ExprStmt {
-                inner: self.expression_statement(tokens)?,
-                span: span::Span::new(t.clone()),
-            }),
+            Some(t) if matches!(t.token_type, token::TokenType::If) => {
+                self.advance(tokens);
+                let (condition, then, else_branch) = self.if_statement(tokens)?;
+                Ok(ast::Stmt::If {
+                    condition: condition,
+                    then: Box::new(then),
+                    else_branch: else_branch.map(|e_b| Box::new(e_b)),
+                    span: span::Span::new(t.clone()),
+                })
+            }
+            Some(t) if matches!(t.token_type, token::TokenType::While) => {
+                self.while_statement(tokens)
+            }
+            Some(t) if matches!(t.token_type, token::TokenType::For) => self.for_statement(tokens),
+            Some(_) => self.expression_statement(tokens),
             None => panic!("tried to consume token with no more tokens available."),
         }
     }
+
+    fn for_statement(&mut self, tokens: &Vec<token::Token>) -> Result<ast::Stmt, ParseError> {
+        // the for statement is desugared into a while statement. We will use the span for 'for'
+        // for all desugared ast nodes.
+        let for_span =
+            span::Span::new(self.consume(token::TokenType::For, tokens, "Expect 'for' token")?);
+
+        self.consume(
+            token::TokenType::LeftParen,
+            tokens,
+            "Expect '(' after 'for'.",
+        )?;
+
+        let initializier_opt = if let Some(t) = self.peek_current(tokens) {
+            if matches!(t.token_type, token::TokenType::Semicolon) {
+                self.advance(tokens);
+                None
+            } else if matches!(t.token_type, token::TokenType::Var) {
+                Some(self.var_declaration(tokens)?)
+            } else {
+                Some(self.expression_statement(tokens)?)
+            }
+        } else {
+            Err(ParseError::new(None, "Expect token, reached EOF"))?
+        };
+
+        let condition_opt = if let Some(t) = self.peek_current(tokens) {
+            if !matches!(t.token_type, token::TokenType::Semicolon) {
+                Some(self.expression(tokens)?)
+            } else {
+                None
+            }
+        } else {
+            Err(ParseError::new(None, "Expect token, reached EOF"))?
+        };
+
+        self.consume(
+            token::TokenType::Semicolon,
+            tokens,
+            "Expect ';' after loop condition.",
+        )?;
+
+        let incrementor_opt = if let Some(t) = self.peek_current(tokens) {
+            if !matches!(t.token_type, token::TokenType::RightParen) {
+                Some(ast::Stmt::ExprStmt {
+                    inner: self.expression(tokens)?,
+                    span: span::Span::new(t.clone()),
+                })
+            } else {
+                None
+            }
+        } else {
+            Err(ParseError::new(None, "Expect token, reached EOF"))?
+        };
+
+        self.consume(
+            token::TokenType::RightParen,
+            tokens,
+            "Expect ')' after clauses.",
+        )?;
+
+        let mut body = self.statement(tokens)?;
+
+        if let Some(incrementor_stmt) = incrementor_opt {
+            body = ast::Stmt::Block {
+                statements: vec![body, incrementor_stmt],
+                span: for_span.clone(),
+            }
+        };
+
+        let condition = if let Some(condition_expr) = condition_opt {
+            condition_expr
+        } else {
+            // TODO: span is dummy
+            ast::Expr::Literal {
+                inner: LitVal::True,
+                span: for_span.clone(),
+            }
+        };
+
+        body = ast::Stmt::While {
+            condition: condition,
+            body: Box::new(body),
+            span: for_span.clone(),
+        };
+
+        if let Some(intiailizer) = initializier_opt {
+            body = ast::Stmt::Block {
+                statements: vec![intiailizer, body],
+                span: for_span.clone(),
+            }
+        };
+
+        Ok(body)
+    }
+
+    fn while_statement(&mut self, tokens: &Vec<token::Token>) -> Result<ast::Stmt, ParseError> {
+        let while_token = self.consume(token::TokenType::While, tokens, "Expect 'while' token.")?;
+
+        self.consume(
+            token::TokenType::LeftParen,
+            tokens,
+            "Expect '(' after 'while'.",
+        )?;
+
+        let condition = self.expression(tokens)?;
+
+        self.consume(
+            token::TokenType::RightParen,
+            tokens,
+            "expect ') after condition.",
+        )?;
+
+        let body = self.statement(tokens)?;
+
+        Ok(ast::Stmt::While {
+            condition: condition,
+            body: Box::new(body),
+            span: span::Span::new(while_token),
+        })
+    }
+
+    fn if_statement(
+        &mut self,
+        tokens: &Vec<token::Token>,
+    ) -> Result<(ast::Expr, ast::Stmt, Option<ast::Stmt>), ParseError> {
+        match self.advance(tokens) {
+            Some(t) if matches!(t.token_type, token::TokenType::LeftParen) => {
+                let condition = self.expression(tokens)?;
+                match self.advance(tokens) {
+                    Some(t) if matches!(t.token_type, token::TokenType::RightParen) => {
+                        let then = self.statement(tokens)?;
+
+                        let else_branch = match self.peek_current(tokens) {
+                            Some(t) if matches!(t.token_type, token::TokenType::Else) => {
+                                self.advance(tokens);
+                                Some(self.statement(tokens)?)
+                            }
+                            _ => None,
+                        };
+
+                        Ok((condition, then, else_branch))
+                    }
+                    Some(t) => Err(ParseError::new(
+                        Some(t.clone()),
+                        "Expect ')' after if condition.",
+                    )),
+                    None => Err(ParseError::new(None, "Expect '(' after if condition.")),
+                }
+            }
+            Some(t) => Err(ParseError::new(Some(t.clone()), "Expect '(' after 'if'.")),
+            None => Err(ParseError::new(None, "Expect '(' after 'if'.")),
+        }
+    }
+
     fn block(&mut self, tokens: &Vec<token::Token>) -> Result<Vec<ast::Stmt>, ParseError> {
         let mut statements = vec![];
 
@@ -173,8 +339,10 @@ impl RecursiveDescentParser {
     fn expression_statement(
         &mut self,
         tokens: &Vec<token::Token>,
-    ) -> Result<ast::Expr, ParseError> {
+    ) -> Result<ast::Stmt, ParseError> {
+        let span = span::Span::new(self.peek_current(tokens).unwrap().clone());
         let expr = self.expression(tokens)?;
+
         self.advance(tokens).map_or_else(
             || Err(ParseError::new(None, "Expect ';', got end of token stream")),
             |t| {
@@ -184,7 +352,10 @@ impl RecursiveDescentParser {
                         "Expect ';' after expression.",
                     ))
                 } else {
-                    Ok(expr)
+                    Ok(ast::Stmt::ExprStmt {
+                        inner: expr,
+                        span: span,
+                    })
                 }
             },
         )
@@ -195,7 +366,7 @@ impl RecursiveDescentParser {
     }
 
     fn assignment(&mut self, tokens: &Vec<token::Token>) -> Result<ast::Expr, ParseError> {
-        let expr = self.equality(tokens)?;
+        let expr = self.or(tokens)?;
 
         self.peek_current(tokens).map_or(Ok(expr.clone()), |t| {
             if t.token_type == TokenType::Equal {
@@ -217,6 +388,46 @@ impl RecursiveDescentParser {
                 Ok(expr)
             }
         })
+    }
+
+    fn or(&mut self, tokens: &Vec<token::Token>) -> Result<ast::Expr, ParseError> {
+        let mut expr = self.and(tokens)?;
+
+        while let Some(t) = match self.peek_current(tokens) {
+            Some(t) if matches!(t.token_type, token::TokenType::Or) => {
+                self.advance(tokens);
+                Some(t)
+            }
+            _ => None,
+        } {
+            let left = Box::new(expr);
+            let right = Box::new(self.and(tokens)?);
+            let span = span::Span::new(t.clone());
+
+            expr = ast::Expr::LogicOr { left, right, span };
+        }
+
+        Ok(expr)
+    }
+
+    fn and(&mut self, tokens: &Vec<token::Token>) -> Result<ast::Expr, ParseError> {
+        let mut expr = self.equality(tokens)?;
+
+        while let Some(t) = match self.peek_current(tokens) {
+            Some(t) if matches!(t.token_type, token::TokenType::And) => {
+                self.advance(tokens);
+                Some(t)
+            }
+            _ => None,
+        } {
+            let left = Box::new(expr);
+            let right = Box::new(self.and(tokens)?);
+            let span = span::Span::new(t.clone());
+
+            expr = ast::Expr::LogicAnd { left, right, span };
+        }
+
+        Ok(expr)
     }
 
     fn equality(&mut self, tokens: &Vec<token::Token>) -> Result<ast::Expr, ParseError> {
@@ -373,6 +584,25 @@ impl RecursiveDescentParser {
             Some(&tokens[self.current - 1])
         } else {
             None
+        }
+    }
+
+    fn consume<'a>(
+        &mut self,
+        token_type: token::TokenType,
+        tokens: &'a Vec<token::Token>,
+        msg: &'static str,
+    ) -> Result<token::Token, ParseError> {
+        if self.current + 1 < tokens.len() {
+            self.current += 1;
+            let t = tokens[self.current - 1].clone();
+            if t.token_type == token_type {
+                Ok(t)
+            } else {
+                Err(ParseError::new(Some(t), msg))
+            }
+        } else {
+            Err(ParseError::new(None, "Expected a token, reached EOF"))
         }
     }
 
