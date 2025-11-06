@@ -1,23 +1,74 @@
+use std::{cell::RefCell, rc::Rc};
+
+use itertools::izip;
+
 use crate::{
     ast::{self, ExprVisitor, StmtVisitor},
-    environment::{self, Environment},
-    span,
+    environment::Environment,
+    interpreter, span,
 };
 
 #[derive(Clone, Debug)]
 pub enum Value {
     // Object do we need an object?
     Bool(bool),
+    Function(ast::Stmt),
     Number(f64),
     String(String),
     Nil,
 }
 
 impl Value {
+    fn call(
+        &self,
+        interpreter: &mut Interpreter,
+        args: Vec<Value>,
+        span: &span::Span,
+    ) -> Result<Value, RuntimeError> {
+        use Value::*;
+        match self {
+            Function(decl) => match decl {
+                ast::Stmt::Function { params, body, .. } => {
+                    let mut env = Environment::<Value>::new();
+                    env.set_enclosing_env(interpreter.globals.clone());
+                    for (k, v) in izip!(params, args) {
+                        env.define(k.clone(), v);
+                    }
+
+                    interpreter.execute_block(body, env)?;
+                    Ok(Nil)
+                }
+                _ => panic!("declaration should be a callable type"),
+            },
+            _ => Err(RuntimeError::new(
+                span.clone(),
+                "Can only call functions and classes".to_string(),
+            )),
+        }
+    }
+
+    fn arity(&self, span: &span::Span) -> Result<usize, RuntimeError> {
+        use Value::*;
+        match self {
+            Function(decl) => match decl {
+                ast::Stmt::Function { params, .. } => Ok(params.len()),
+                _ => panic!("declaration should be a callable type"),
+            },
+            _ => Err(RuntimeError::new(
+                span.clone(),
+                "Arity only applies to functions and classes".to_string(),
+            )),
+        }
+    }
+
     pub fn stringify(&self) -> String {
         use Value::*;
         match self {
             Bool(b) => format!("{}", b),
+            Function(decl) => match decl {
+                ast::Stmt::Function { name, .. } => name.clone(),
+                _ => panic!("declaration should be a callable type"),
+            },
             Number(n) => format!("{}", n).trim_end_matches(".0").to_string(),
             String(s) => s.clone(),
             Nil => format!("nil"),
@@ -81,14 +132,16 @@ impl RuntimeError {
 }
 
 pub struct Interpreter {
-    env: environment::Environment<Value>,
+    globals: Rc<RefCell<Environment<Value>>>,
+    env: Rc<RefCell<Environment<Value>>>,
 }
 
-impl<'a> Interpreter {
+impl Interpreter {
     pub fn new() -> Self {
-        Self {
-            env: Environment::new(),
-        }
+        let globals = Rc::new(RefCell::new(Environment::new()));
+
+        let env = Rc::clone(&globals);
+        Self { globals, env }
     }
 
     pub fn interpret(&mut self, statements: &Vec<ast::Stmt>) -> Result<(), RuntimeError> {
@@ -103,9 +156,13 @@ impl<'a> Interpreter {
         self.visit_statement(statement)
     }
 
-    fn execute_block(&mut self, statements: &Vec<ast::Stmt>) -> Result<(), RuntimeError> {
-        let prev_env = std::mem::replace(&mut self.env, Environment::new());
-        self.env.set_enclosing_env(prev_env);
+    fn execute_block(
+        &mut self,
+        statements: &Vec<ast::Stmt>,
+        enclosing_env: Environment<Value>,
+    ) -> Result<(), RuntimeError> {
+        let prev_env = std::mem::replace(&mut self.env, Rc::new(RefCell::new(enclosing_env)));
+        self.env.borrow_mut().set_enclosing_env(prev_env);
 
         for stmt in statements {
             self.execute(stmt)?;
@@ -113,7 +170,8 @@ impl<'a> Interpreter {
 
         // TODO: if we encounter error in executing statements, we will preempt
         // resetting the env to the parent. We should just exit.
-        self.env = self.env.get_enclosing_env();
+        let prev = self.env.borrow().get_enclosing_env();
+        self.env = prev;
 
         Ok(())
     }
@@ -129,7 +187,7 @@ impl StmtVisitor<Result<(), RuntimeError>> for Interpreter {
         statements: &Vec<ast::Stmt>,
         _: &span::Span,
     ) -> Result<(), RuntimeError> {
-        self.execute_block(statements)
+        self.execute_block(statements, Environment::<Value>::new())
     }
 
     fn visit_expr_statement(
@@ -138,6 +196,24 @@ impl StmtVisitor<Result<(), RuntimeError>> for Interpreter {
         _: &span::Span,
     ) -> Result<(), RuntimeError> {
         self.evaluate(expr)?;
+        Ok(())
+    }
+
+    fn visit_function_statement(
+        &mut self,
+        name: &String,
+        params: &Vec<String>,
+        body: &Vec<ast::Stmt>,
+    ) -> Result<(), RuntimeError> {
+        let function = ast::Stmt::Function {
+            name: name.clone(),
+            params: params.clone(),
+            body: body.clone(),
+        };
+        self.env
+            .borrow_mut()
+            .define(name.clone(), Value::Function(function));
+
         Ok(())
     }
 
@@ -178,7 +254,7 @@ impl StmtVisitor<Result<(), RuntimeError>> for Interpreter {
             None => Value::Nil,
         };
 
-        Ok(self.env.define(name.clone(), init_val))
+        Ok(self.env.borrow_mut().define(name.clone(), init_val))
     }
 
     fn visit_while_statement(
@@ -204,7 +280,7 @@ impl ExprVisitor<Result<Value, RuntimeError>> for Interpreter {
     ) -> Result<Value, RuntimeError> {
         let r_value = self.evaluate(value_expr)?;
 
-        match self.env.assign(name.clone(), r_value.clone()) {
+        match self.env.borrow_mut().assign(name.clone(), r_value.clone()) {
             Ok(()) => Ok(r_value),
             Err(_) => Err(RuntimeError::new(
                 span.clone(),
@@ -271,6 +347,33 @@ impl ExprVisitor<Result<Value, RuntimeError>> for Interpreter {
                 ),
             )),
         }
+    }
+
+    fn visit_call(
+        &mut self,
+        callee: &ast::Expr,
+        arguments: &Vec<ast::Expr>,
+        span: &span::Span,
+    ) -> Result<Value, RuntimeError> {
+        let callee = self.evaluate(callee)?;
+
+        let mut args = vec![];
+        for arg in arguments {
+            args.push(self.evaluate(arg)?);
+        }
+
+        if args.len() != callee.arity(span)? {
+            Err(RuntimeError::new(
+                span.clone(),
+                format!(
+                    "Expected {} arguments but got {}.",
+                    args.len(),
+                    callee.arity(span)?
+                ),
+            ))?
+        }
+
+        callee.call(self, args, span)
     }
 
     fn visit_grouping(
@@ -344,7 +447,7 @@ impl ExprVisitor<Result<Value, RuntimeError>> for Interpreter {
     }
 
     fn visit_variable(&mut self, name: &String, span: &span::Span) -> Result<Value, RuntimeError> {
-        match self.env.get(name) {
+        match self.env.borrow().get(name) {
             Some(v) => Ok(v.clone()),
             None => Err(RuntimeError::new(
                 span.clone(),

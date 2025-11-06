@@ -6,11 +6,11 @@ use crate::scanner::token::{
 use crate::span::{self, Span};
 
 // Refactor and implement parse as macro and use pattern match instead of static
-static EQ_TOKEN_TYPES: &[token::TokenType] = &[EqualEqual, BangEqual];
-static CMP_TOKEN_TYPES: &[token::TokenType] = &[Greater, GreaterEqual, Less, LessEqual];
-static TERM_TOKEN_TYPES: &[token::TokenType] = &[Plus, Minus];
-static FACTOR_TOKEN_TYPES: &[token::TokenType] = &[Slash, Star];
-static UNARY_TOKEN_TYPES: &[token::TokenType] = &[Bang, Minus];
+static EQ_TOKEN_TYPES: &[TokenType] = &[EqualEqual, BangEqual];
+static CMP_TOKEN_TYPES: &[TokenType] = &[Greater, GreaterEqual, Less, LessEqual];
+static TERM_TOKEN_TYPES: &[TokenType] = &[Plus, Minus];
+static FACTOR_TOKEN_TYPES: &[TokenType] = &[Slash, Star];
+static UNARY_TOKEN_TYPES: &[TokenType] = &[Bang, Minus];
 
 #[derive(Debug)]
 pub struct ParseError {
@@ -62,14 +62,14 @@ impl RecursiveDescentParser {
 
     fn declaration(&mut self, tokens: &Vec<token::Token>) -> Result<ast::Stmt, ParseError> {
         match self.peek_current(tokens) {
-            Some(t) if t.token_type == TokenType::Var => self.var_declaration(tokens),
+            Some(t) if matches!(t.token_type, TokenType::Var) => self.var_declaration(tokens),
+            Some(t) if matches!(t.token_type, TokenType::Fun) => self.function(tokens, "fun"),
             _ => self.statement(tokens),
         }
     }
 
     fn var_declaration(&mut self, tokens: &Vec<token::Token>) -> Result<ast::Stmt, ParseError> {
-        let span =
-            span::Span::new(self.consume(token::TokenType::Var, tokens, "Expect 'var' token")?);
+        let span = span::Span::new(self.consume(TokenType::Var, tokens, "Expect 'var' token")?);
 
         self.advance(tokens)
             .map_or(
@@ -106,23 +106,85 @@ impl RecursiveDescentParser {
             )
     }
 
+    fn function(
+        &mut self,
+        tokens: &Vec<token::Token>,
+        kind: &str, // TODO: enum
+    ) -> Result<ast::Stmt, ParseError> {
+        let fun_token = self.consume(TokenType::Fun, tokens, "Expect function token")?;
+        let span = span::Span::new(fun_token);
+
+        let name = self
+            .advance(tokens)
+            .map(|t| match &t.token_type {
+                TokenType::Identifier(name) => Ok(name.clone()),
+                _ => Err(ParseError::new(Some(t.clone()), "Expect function name.")),
+            })
+            .unwrap_or(Err(ParseError::new(None, "Expect function name, got EOF")))?;
+
+        self.consume(
+            TokenType::LeftParen,
+            tokens,
+            "Expect '(' after function name.",
+        )?;
+
+        let mut params = vec![];
+
+        while let Some(t) = match self.peek_current(tokens) {
+            Some(t) if !matches!(t.token_type, TokenType::RightParen) => Some(t),
+            _ => None,
+        } {
+            if !matches!(t.token_type, TokenType::Comma) {
+                if params.len() >= 255 {
+                    Err(ParseError::new(
+                        Some(t.clone()),
+                        "Can't have more than 255 parameters",
+                    ))?
+                }
+
+                let param_name = match &t.token_type {
+                    TokenType::Identifier(name) => Ok(name.clone()),
+                    _ => Err(ParseError::new(
+                        Some(t.clone()),
+                        "Expect IDENTIFIER for parameter name.",
+                    )),
+                }?;
+                params.push(param_name);
+            }
+
+            self.advance(tokens);
+        }
+
+        self.consume(TokenType::RightParen, tokens, "Expect ')' after parameters")?;
+
+        self.consume(
+            TokenType::LeftBrace,
+            tokens,
+            "Expect '{' before function body",
+        )?;
+
+        let body = self.block(tokens)?;
+
+        Ok(ast::Stmt::Function { name, params, body })
+    }
+
     fn statement(&mut self, tokens: &Vec<token::Token>) -> Result<ast::Stmt, ParseError> {
         match self.peek_current(tokens) {
-            Some(t) if matches!(t.token_type, token::TokenType::Print) => {
+            Some(t) if matches!(t.token_type, TokenType::Print) => {
                 self.advance(tokens);
                 Ok(ast::Stmt::Print {
                     rhs: self.print_statement(tokens)?,
                     span: span::Span::new(t.clone()),
                 })
             }
-            Some(t) if matches!(t.token_type, token::TokenType::LeftBrace) => {
+            Some(t) if matches!(t.token_type, TokenType::LeftBrace) => {
                 self.advance(tokens);
                 Ok(ast::Stmt::Block {
                     statements: self.block(tokens)?,
                     span: span::Span::new(t.clone()),
                 })
             }
-            Some(t) if matches!(t.token_type, token::TokenType::If) => {
+            Some(t) if matches!(t.token_type, TokenType::If) => {
                 self.advance(tokens);
                 let (condition, then, else_branch) = self.if_statement(tokens)?;
                 Ok(ast::Stmt::If {
@@ -132,10 +194,8 @@ impl RecursiveDescentParser {
                     span: span::Span::new(t.clone()),
                 })
             }
-            Some(t) if matches!(t.token_type, token::TokenType::While) => {
-                self.while_statement(tokens)
-            }
-            Some(t) if matches!(t.token_type, token::TokenType::For) => self.for_statement(tokens),
+            Some(t) if matches!(t.token_type, TokenType::While) => self.while_statement(tokens),
+            Some(t) if matches!(t.token_type, TokenType::For) => self.for_statement(tokens),
             Some(_) => self.expression_statement(tokens),
             None => panic!("tried to consume token with no more tokens available."),
         }
@@ -145,19 +205,15 @@ impl RecursiveDescentParser {
         // the for statement is desugared into a while statement. We will use the span for 'for'
         // for all desugared ast nodes.
         let for_span =
-            span::Span::new(self.consume(token::TokenType::For, tokens, "Expect 'for' token")?);
+            span::Span::new(self.consume(TokenType::For, tokens, "Expect 'for' token")?);
 
-        self.consume(
-            token::TokenType::LeftParen,
-            tokens,
-            "Expect '(' after 'for'.",
-        )?;
+        self.consume(TokenType::LeftParen, tokens, "Expect '(' after 'for'.")?;
 
         let initializier_opt = if let Some(t) = self.peek_current(tokens) {
-            if matches!(t.token_type, token::TokenType::Semicolon) {
+            if matches!(t.token_type, TokenType::Semicolon) {
                 self.advance(tokens);
                 None
-            } else if matches!(t.token_type, token::TokenType::Var) {
+            } else if matches!(t.token_type, TokenType::Var) {
                 Some(self.var_declaration(tokens)?)
             } else {
                 Some(self.expression_statement(tokens)?)
@@ -167,7 +223,7 @@ impl RecursiveDescentParser {
         };
 
         let condition_opt = if let Some(t) = self.peek_current(tokens) {
-            if !matches!(t.token_type, token::TokenType::Semicolon) {
+            if !matches!(t.token_type, TokenType::Semicolon) {
                 Some(self.expression(tokens)?)
             } else {
                 None
@@ -177,13 +233,13 @@ impl RecursiveDescentParser {
         };
 
         self.consume(
-            token::TokenType::Semicolon,
+            TokenType::Semicolon,
             tokens,
             "Expect ';' after loop condition.",
         )?;
 
         let incrementor_opt = if let Some(t) = self.peek_current(tokens) {
-            if !matches!(t.token_type, token::TokenType::RightParen) {
+            if !matches!(t.token_type, TokenType::RightParen) {
                 Some(ast::Stmt::ExprStmt {
                     inner: self.expression(tokens)?,
                     span: span::Span::new(t.clone()),
@@ -195,11 +251,7 @@ impl RecursiveDescentParser {
             Err(ParseError::new(None, "Expect token, reached EOF"))?
         };
 
-        self.consume(
-            token::TokenType::RightParen,
-            tokens,
-            "Expect ')' after clauses.",
-        )?;
+        self.consume(TokenType::RightParen, tokens, "Expect ')' after clauses.")?;
 
         let mut body = self.statement(tokens)?;
 
@@ -237,21 +289,13 @@ impl RecursiveDescentParser {
     }
 
     fn while_statement(&mut self, tokens: &Vec<token::Token>) -> Result<ast::Stmt, ParseError> {
-        let while_token = self.consume(token::TokenType::While, tokens, "Expect 'while' token.")?;
+        let while_token = self.consume(TokenType::While, tokens, "Expect 'while' token.")?;
 
-        self.consume(
-            token::TokenType::LeftParen,
-            tokens,
-            "Expect '(' after 'while'.",
-        )?;
+        self.consume(TokenType::LeftParen, tokens, "Expect '(' after 'while'.")?;
 
         let condition = self.expression(tokens)?;
 
-        self.consume(
-            token::TokenType::RightParen,
-            tokens,
-            "expect ') after condition.",
-        )?;
+        self.consume(TokenType::RightParen, tokens, "expect ') after condition.")?;
 
         let body = self.statement(tokens)?;
 
@@ -267,14 +311,14 @@ impl RecursiveDescentParser {
         tokens: &Vec<token::Token>,
     ) -> Result<(ast::Expr, ast::Stmt, Option<ast::Stmt>), ParseError> {
         match self.advance(tokens) {
-            Some(t) if matches!(t.token_type, token::TokenType::LeftParen) => {
+            Some(t) if matches!(t.token_type, TokenType::LeftParen) => {
                 let condition = self.expression(tokens)?;
                 match self.advance(tokens) {
-                    Some(t) if matches!(t.token_type, token::TokenType::RightParen) => {
+                    Some(t) if matches!(t.token_type, TokenType::RightParen) => {
                         let then = self.statement(tokens)?;
 
                         let else_branch = match self.peek_current(tokens) {
-                            Some(t) if matches!(t.token_type, token::TokenType::Else) => {
+                            Some(t) if matches!(t.token_type, TokenType::Else) => {
                                 self.advance(tokens);
                                 Some(self.statement(tokens)?)
                             }
@@ -301,7 +345,7 @@ impl RecursiveDescentParser {
         while let Some(_) = self
             .peek_current(tokens)
             .map(|token| match token {
-                t if t.token_type == token::TokenType::RightBrace => None,
+                t if t.token_type == TokenType::RightBrace => None,
                 t => Some(t),
             })
             .flatten()
@@ -310,7 +354,7 @@ impl RecursiveDescentParser {
         }
 
         match self.advance(tokens) {
-            Some(t) if t.token_type == token::TokenType::RightBrace => Ok(statements),
+            Some(t) if t.token_type == TokenType::RightBrace => Ok(statements),
             Some(t) => Err(ParseError::new(
                 Some(t.clone()),
                 "Expect '}' after block, got different token",
@@ -327,7 +371,7 @@ impl RecursiveDescentParser {
         self.advance(tokens).map_or_else(
             || Err(ParseError::new(None, "Expect ';', got end of token stream")),
             |t| {
-                if !matches!(t.token_type, token::TokenType::Semicolon) {
+                if !matches!(t.token_type, TokenType::Semicolon) {
                     Err(ParseError::new(Some(t.clone()), "Expect ';' after value."))
                 } else {
                     Ok(expr)
@@ -346,7 +390,7 @@ impl RecursiveDescentParser {
         self.advance(tokens).map_or_else(
             || Err(ParseError::new(None, "Expect ';', got end of token stream")),
             |t| {
-                if !matches!(t.token_type, token::TokenType::Semicolon) {
+                if !matches!(t.token_type, TokenType::Semicolon) {
                     Err(ParseError::new(
                         Some(t.clone()),
                         "Expect ';' after expression.",
@@ -394,7 +438,7 @@ impl RecursiveDescentParser {
         let mut expr = self.and(tokens)?;
 
         while let Some(t) = match self.peek_current(tokens) {
-            Some(t) if matches!(t.token_type, token::TokenType::Or) => {
+            Some(t) if matches!(t.token_type, TokenType::Or) => {
                 self.advance(tokens);
                 Some(t)
             }
@@ -414,7 +458,7 @@ impl RecursiveDescentParser {
         let mut expr = self.equality(tokens)?;
 
         while let Some(t) = match self.peek_current(tokens) {
-            Some(t) if matches!(t.token_type, token::TokenType::And) => {
+            Some(t) if matches!(t.token_type, TokenType::And) => {
                 self.advance(tokens);
                 Some(t)
             }
@@ -458,8 +502,8 @@ impl RecursiveDescentParser {
             })
             .flatten()
         {
+            use TokenType::*;
             use ast::UnOp::*;
-            use token::TokenType::*;
             let un_op_ast = match un_op_token.token_type {
                 Bang => Not,
                 Minus => Neg,
@@ -471,13 +515,76 @@ impl RecursiveDescentParser {
                 span: span::Span::new(un_op_token.clone()),
             })
         } else {
-            self.primary(tokens)
+            self.call(tokens)
+        }
+    }
+
+    fn call(&mut self, tokens: &Vec<token::Token>) -> Result<ast::Expr, ParseError> {
+        let mut expr = self.primary(tokens)?;
+
+        // while it's a '(' and we successfully finished parsing the call, parse another call
+        // setting the result of the finished parse as the new (outer most) callee
+        while let Some(t) = match self.peek_current(tokens) {
+            Some(t) if matches!(t.token_type, TokenType::LeftParen) => Some(t),
+            _ => None,
+        } {
+            self.advance(tokens);
+            expr = self.finish_call(expr, tokens)?;
+        }
+
+        Ok(expr)
+    }
+
+    fn finish_call(
+        &mut self,
+        callee: Expr,
+        tokens: &Vec<token::Token>,
+    ) -> Result<ast::Expr, ParseError> {
+        if let Some(t) = self.peek_current(tokens) {
+            let mut args = vec![];
+            if !matches!(t.token_type, TokenType::RightParen) {
+                let mut parse_another_arg = true;
+
+                while parse_another_arg {
+                    // TODO: this doesn't have to return an error immediately, during parsing. We
+                    // could report the error using some other mechanism and continue parsing.
+                    if args.len() > 255 {
+                        Err(ParseError::new(
+                            Some(t.clone()),
+                            "Can't have more than 255 arguments",
+                        ))?;
+                    }
+                    args.push(self.expression(tokens)?);
+
+                    match self.peek_current(tokens) {
+                        Some(t) if matches!(t.token_type, TokenType::Comma) => {
+                            self.advance(tokens);
+                        }
+                        _ => parse_another_arg = false,
+                    }
+                }
+            }
+
+            match self.advance(tokens) {
+                Some(t) if matches!(t.token_type, TokenType::RightParen) => Ok(ast::Expr::Call {
+                    callee: Box::new(callee),
+                    args: args,
+                    span: span::Span::new(t.clone()),
+                }),
+                Some(t) => Err(ParseError::new(
+                    Some(t.clone()),
+                    "Expect ')' after arguments",
+                )),
+                None => Err(ParseError::new(None, "Expect ')' after arguments, got EOF")),
+            }
+        } else {
+            Err(ParseError::new(None, "Expect argument or ')', got EOF"))
         }
     }
 
     fn primary(&mut self, tokens: &Vec<token::Token>) -> Result<ast::Expr, ParseError> {
         if let Some(token) = self.advance(tokens) {
-            use token::TokenType::*;
+            use TokenType::*;
             match &token.token_type {
                 False => Ok(Expr::Literal {
                     inner: LitVal::False,
@@ -533,7 +640,7 @@ impl RecursiveDescentParser {
     fn parse_binary_op(
         &mut self,
         tokens: &Vec<token::Token>,
-        token_types: &[token::TokenType],
+        token_types: &[TokenType],
         precedence_match: fn(s: &mut Self, &Vec<token::Token>) -> Result<ast::Expr, ParseError>,
     ) -> Result<ast::Expr, ParseError> {
         let mut expr = precedence_match(self, tokens)?;
@@ -549,8 +656,8 @@ impl RecursiveDescentParser {
             })
             .flatten()
         {
+            use TokenType::*;
             use ast::BinOp::*;
-            use token::TokenType::*;
             let bin_op_ast = match bin_op_token.token_type {
                 EqualEqual => Eq,
                 BangEqual => Ne,
@@ -589,7 +696,7 @@ impl RecursiveDescentParser {
 
     fn consume<'a>(
         &mut self,
-        token_type: token::TokenType,
+        token_type: TokenType,
         tokens: &'a Vec<token::Token>,
         msg: &'static str,
     ) -> Result<token::Token, ParseError> {
@@ -636,7 +743,7 @@ impl RecursiveDescentParser {
     }
 }
 
-fn match_token_types(token_types: &[token::TokenType], token: &token::Token) -> bool {
+fn match_token_types(token_types: &[TokenType], token: &token::Token) -> bool {
     for token_type in token_types {
         if &token.token_type == token_type {
             return true;

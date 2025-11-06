@@ -4,7 +4,7 @@
 // operators.
 // Parenthesis - A pair of ( and ) wrapped around an expression.
 
-use crate::span;
+use crate::{interpreter, span};
 
 // syntactic grammar
 // program      -> statement* EOF ;
@@ -30,6 +30,11 @@ pub enum Stmt {
         inner: Expr,
         span: span::Span,
     },
+    Function {
+        name: String,
+        params: Vec<String>,
+        body: Vec<Stmt>,
+    },
     If {
         condition: Expr,
         then: Box<Stmt>,
@@ -52,20 +57,6 @@ pub enum Stmt {
     },
 }
 
-impl Stmt {
-    pub fn get_span(&self) -> &span::Span {
-        use Stmt::*;
-        match self {
-            Block { span, .. } => span,
-            ExprStmt { span, .. } => span,
-            If { span, .. } => span,
-            Print { span, .. } => span,
-            Var { span, .. } => span,
-            While { span, .. } => span,
-        }
-    }
-}
-
 #[derive(Clone, Debug)]
 pub enum Expr {
     Assign {
@@ -77,6 +68,11 @@ pub enum Expr {
         op: BinOp,
         lhs: Box<Expr>,
         rhs: Box<Expr>,
+        span: span::Span,
+    },
+    Call {
+        callee: Box<Expr>,
+        args: Vec<Expr>,
         span: span::Span,
     },
     Grouping {
@@ -106,6 +102,20 @@ pub enum Expr {
         name: String,
         span: span::Span,
     },
+}
+
+impl interpreter::Callable for Expr {
+    fn call(
+        &mut self,
+        interpreter: &mut interpreter::Interpreter,
+        arguments: Vec<interpreter::Value>,
+    ) -> interpreter::Value {
+        use Expr::*;
+        match self {
+            Call { callee, args, span } => todo!(),
+            _ => todo!("add error handling when call on a value that isn't callable"),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -171,6 +181,7 @@ pub trait StmtVisitor<T> {
         match s {
             Block { statements, span } => self.visit_block_statement(statements, span),
             ExprStmt { inner, span } => self.visit_expr_statement(inner, span),
+            Function { name, params, body } => self.visit_function_statement(name, params, body),
             If {
                 condition,
                 then,
@@ -194,6 +205,13 @@ pub trait StmtVisitor<T> {
     fn visit_block_statement(&mut self, statements: &Vec<Stmt>, span: &span::Span) -> T;
 
     fn visit_expr_statement(&mut self, expr: &Expr, span: &span::Span) -> T;
+
+    fn visit_function_statement(
+        &mut self,
+        name: &String,
+        params: &Vec<String>,
+        body: &Vec<Stmt>,
+    ) -> T;
 
     fn visit_if_statement(
         &mut self,
@@ -222,6 +240,7 @@ pub trait ExprVisitor<T> {
         match e {
             Assign { name, value, span } => self.visit_assignment(name, value, span),
             Binary { op, lhs, rhs, span } => self.visit_binary(op, lhs, rhs, span),
+            Call { callee, args, span } => self.visit_call(callee, args, span),
             Grouping { expr, span } => self.visit_grouping(expr, span),
             Literal { inner, span } => self.visit_literal(inner, span),
             LogicAnd { left, right, span } => self.visit_logic_and(left, right, span),
@@ -240,6 +259,8 @@ pub trait ExprVisitor<T> {
         rhs: &Box<Expr>,
         span: &span::Span,
     ) -> T;
+
+    fn visit_call(&mut self, callee: &Expr, args: &Vec<Expr>, span: &span::Span) -> T;
 
     fn visit_grouping(&mut self, expr: &Box<Expr>, span: &span::Span) -> T;
 
@@ -305,6 +326,15 @@ impl StmtVisitor<String> for AstPrinter {
         self.parenthesize("expression statement", vec![expr])
     }
 
+    fn visit_function_statement(
+        &mut self,
+        name: &String,
+        params: &Vec<String>,
+        body: &Vec<Stmt>,
+    ) -> String {
+        self.parenthesize(format!("<fn> {}", name).as_str(), vec![])
+    }
+
     fn visit_if_statement(
         &mut self,
         condition: &Expr,
@@ -358,6 +388,14 @@ impl ExprVisitor<String> for AstPrinter {
         _: &span::Span,
     ) -> String {
         self.parenthesize(bin_op.to_string(), vec![lhs, rhs])
+    }
+
+    fn visit_call(&mut self, callee: &Expr, args: &Vec<Expr>, _: &span::Span) -> String {
+        let callee = self.visit_expr(callee);
+        self.parenthesize(
+            format!("callee: {}", callee).as_str(),
+            args.iter().collect(),
+        )
     }
 
     fn visit_grouping(&mut self, expr: &Box<Expr>, _: &span::Span) -> String {
