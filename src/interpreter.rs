@@ -1,21 +1,36 @@
-use std::{cell::RefCell, rc::Rc};
+use std::{
+    cell::RefCell,
+    rc::Rc,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use itertools::izip;
 
 use crate::{
     ast::{self, ExprVisitor, StmtVisitor},
     environment::Environment,
-    interpreter, span,
+    span,
 };
 
 #[derive(Clone, Debug)]
 pub enum Value {
     // Object do we need an object?
     Bool(bool),
-    Function(ast::Stmt),
+    Function(FunctionType),
     Number(f64),
     String(String),
     Nil,
+}
+
+#[derive(Clone, Debug)]
+pub enum FunctionType {
+    BuiltIn(BuiltInFunctionType),
+    UserDefined(ast::Stmt),
+}
+
+#[derive(Clone, Debug)]
+pub enum BuiltInFunctionType {
+    Clock,
 }
 
 impl Value {
@@ -27,18 +42,28 @@ impl Value {
     ) -> Result<Value, RuntimeError> {
         use Value::*;
         match self {
-            Function(decl) => match decl {
-                ast::Stmt::Function { params, body, .. } => {
-                    let mut env = Environment::<Value>::new();
-                    env.set_enclosing_env(interpreter.globals.clone());
-                    for (k, v) in izip!(params, args) {
-                        env.define(k.clone(), v);
+            Function(f) => match f {
+                FunctionType::BuiltIn(f_type) => match f_type {
+                    BuiltInFunctionType::Clock => {
+                        let now = SystemTime::now();
+                        let duration_since_epoch =
+                            now.duration_since(UNIX_EPOCH).expect("system-time error");
+                        Ok(Value::Number(duration_since_epoch.as_secs_f64()))
                     }
+                },
+                FunctionType::UserDefined(stmt) => match stmt {
+                    ast::Stmt::Function { params, body, .. } => {
+                        let mut env = Environment::<Value>::new();
+                        env.set_enclosing_env(interpreter.globals.clone());
+                        for (k, v) in izip!(params, args) {
+                            env.define(k.clone(), v);
+                        }
 
-                    interpreter.execute_block(body, env)?;
-                    Ok(Nil)
-                }
-                _ => panic!("declaration should be a callable type"),
+                        interpreter.execute_block(body, env)?;
+                        Ok(Nil)
+                    }
+                    _ => panic!("declaration should be a callable type"),
+                },
             },
             _ => Err(RuntimeError::new(
                 span.clone(),
@@ -50,9 +75,14 @@ impl Value {
     fn arity(&self, span: &span::Span) -> Result<usize, RuntimeError> {
         use Value::*;
         match self {
-            Function(decl) => match decl {
-                ast::Stmt::Function { params, .. } => Ok(params.len()),
-                _ => panic!("declaration should be a callable type"),
+            Function(f_type) => match f_type {
+                FunctionType::BuiltIn(f_type) => match f_type {
+                    BuiltInFunctionType::Clock => Ok(0),
+                },
+                FunctionType::UserDefined(stmt) => match stmt {
+                    ast::Stmt::Function { params, .. } => Ok(params.len()),
+                    _ => panic!("arity can only be invoked on callable type"),
+                },
             },
             _ => Err(RuntimeError::new(
                 span.clone(),
@@ -65,9 +95,14 @@ impl Value {
         use Value::*;
         match self {
             Bool(b) => format!("{}", b),
-            Function(decl) => match decl {
-                ast::Stmt::Function { name, .. } => name.clone(),
-                _ => panic!("declaration should be a callable type"),
+            Function(f_type) => match f_type {
+                FunctionType::BuiltIn(f_type) => match f_type {
+                    BuiltInFunctionType::Clock => "<native fn clock>".to_string(),
+                },
+                FunctionType::UserDefined(stmt) => match stmt {
+                    ast::Stmt::Function { name, .. } => name.clone(),
+                    _ => panic!("arity can only be invoked on callable type"),
+                },
             },
             Number(n) => format!("{}", n).trim_end_matches(".0").to_string(),
             String(s) => s.clone(),
@@ -139,6 +174,8 @@ pub struct Interpreter {
 impl Interpreter {
     pub fn new() -> Self {
         let globals = Rc::new(RefCell::new(Environment::new()));
+        let clock_func = Value::Function(FunctionType::BuiltIn(BuiltInFunctionType::Clock));
+        globals.borrow_mut().define("clock".to_string(), clock_func);
 
         let env = Rc::clone(&globals);
         Self { globals, env }
@@ -210,9 +247,12 @@ impl StmtVisitor<Result<(), RuntimeError>> for Interpreter {
             params: params.clone(),
             body: body.clone(),
         };
+
+        let user_defined_func = Value::Function(FunctionType::UserDefined(function));
+
         self.env
             .borrow_mut()
-            .define(name.clone(), Value::Function(function));
+            .define(name.clone(), user_defined_func);
 
         Ok(())
     }

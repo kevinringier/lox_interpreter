@@ -8,8 +8,8 @@ mod span;
 
 use std::process;
 
-// implmenent clock native function
 // implement return statement
+// implement local functions and closures
 fn main() -> process::ExitCode {
     let args: Vec<String> = std::env::args().collect();
 

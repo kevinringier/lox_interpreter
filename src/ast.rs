@@ -1,24 +1,4 @@
-// Literals - Numbers, strings, Booleans, nil.
-// Unary expressions - A prefix ! to perform a logical not, and - to negate a number.
-// Binary expressions - The infix arithmetic (+, -, *, /) and logic (==, !=, <, <=, >, >=)
-// operators.
-// Parenthesis - A pair of ( and ) wrapped around an expression.
-
-use crate::{interpreter, span};
-
-// syntactic grammar
-// program      -> statement* EOF ;
-// declaration  -> varDecl | statement ;
-// varDecl      -> "var" IDENTIFIER ( "=" expression )? ";" ;
-// statement    -> exprStmt | printStmt ;
-// exprStmt     -> expression ";" ;
-// printStmt    -> "print" expression ";" ;
-// expression   -> literal | unary | binary | grouping ;
-// literal      -> NUMBER | STRING | "true" | "false" | "nil" ;
-// grouping     -> "(" expression ")" ;
-// unary        -> ( "-" | "!" ) expression ;
-// binary       -> expression operator expression
-// operator     -> "==" | "!=" | "<" | "<=" | ">" | ">=" | "+" | "-" | "*" | "/" ;
+use crate::span;
 
 #[derive(Clone, Debug)]
 pub enum Stmt {
@@ -102,20 +82,6 @@ pub enum Expr {
         name: String,
         span: span::Span,
     },
-}
-
-impl interpreter::Callable for Expr {
-    fn call(
-        &mut self,
-        interpreter: &mut interpreter::Interpreter,
-        arguments: Vec<interpreter::Value>,
-    ) -> interpreter::Value {
-        use Expr::*;
-        match self {
-            Call { callee, args, span } => todo!(),
-            _ => todo!("add error handling when call on a value that isn't callable"),
-        }
-    }
 }
 
 #[derive(Clone, Debug)]

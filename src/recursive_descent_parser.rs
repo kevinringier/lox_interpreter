@@ -5,7 +5,6 @@ use crate::scanner::token::{
 };
 use crate::span::{self, Span};
 
-// Refactor and implement parse as macro and use pattern match instead of static
 static EQ_TOKEN_TYPES: &[TokenType] = &[EqualEqual, BangEqual];
 static CMP_TOKEN_TYPES: &[TokenType] = &[Greater, GreaterEqual, Less, LessEqual];
 static TERM_TOKEN_TYPES: &[TokenType] = &[Plus, Minus];
