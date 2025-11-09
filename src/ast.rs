@@ -1,4 +1,4 @@
-use crate::span;
+use crate::{scanner::token::Token, span};
 
 #[derive(Clone, Debug)]
 pub enum Stmt {
@@ -23,6 +23,11 @@ pub enum Stmt {
     },
     Print {
         rhs: Expr,
+        span: span::Span,
+    },
+    Return {
+        keyword: Token, // TODO: does this need a token?
+        value: Option<Expr>,
         span: span::Span,
     },
     Var {
@@ -155,6 +160,11 @@ pub trait StmtVisitor<T> {
                 span,
             } => self.visit_if_statement(condition, then, else_branch, span),
             Print { rhs, span } => self.visit_print_statement(rhs, span),
+            Return {
+                keyword,
+                value,
+                span,
+            } => self.visit_return_statement(keyword, value, span),
             Var {
                 name,
                 initializer,
@@ -188,6 +198,13 @@ pub trait StmtVisitor<T> {
     ) -> T;
 
     fn visit_print_statement(&mut self, expr: &Expr, span: &span::Span) -> T;
+
+    fn visit_return_statement(
+        &mut self,
+        keyword: &Token,
+        value: &Option<Expr>,
+        span: &span::Span,
+    ) -> T;
 
     fn visit_var_statement(
         &mut self,
@@ -314,6 +331,16 @@ impl StmtVisitor<String> for AstPrinter {
 
     fn visit_print_statement(&mut self, expr: &Expr, _: &span::Span) -> String {
         self.parenthesize("print", vec![expr])
+    }
+
+    fn visit_return_statement(
+        &mut self,
+        keyword: &Token,
+        value: &Option<Expr>,
+        span: &span::Span,
+    ) -> String {
+        let expr = value.as_ref().map(|e| vec![e]).unwrap_or(vec![]);
+        self.parenthesize("return", expr)
     }
 
     fn visit_var_statement(

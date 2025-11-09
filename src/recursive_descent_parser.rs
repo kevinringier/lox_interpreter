@@ -176,6 +176,7 @@ impl RecursiveDescentParser {
                     span: span::Span::new(t.clone()),
                 })
             }
+            Some(t) if matches!(t.token_type, TokenType::Return) => self.return_statement(tokens),
             Some(t) if matches!(t.token_type, TokenType::LeftBrace) => {
                 self.advance(tokens);
                 Ok(ast::Stmt::Block {
@@ -377,6 +378,31 @@ impl RecursiveDescentParser {
                 }
             },
         )
+    }
+
+    fn return_statement(&mut self, tokens: &Vec<token::Token>) -> Result<ast::Stmt, ParseError> {
+        let keyword = self
+            .advance(tokens)
+            .expect("return_statement called without current token being return");
+
+        let value = match self.peek_current(tokens) {
+            Some(t) if !matches!(t.token_type, TokenType::Semicolon) => {
+                Some(self.expression(tokens)?)
+            }
+            _ => None,
+        };
+
+        self.consume(
+            TokenType::Semicolon,
+            tokens,
+            "Expect ';' after return value",
+        )?;
+
+        Ok(ast::Stmt::Return {
+            keyword: keyword.clone(),
+            value: value,
+            span: span::Span::new(keyword.clone()),
+        })
     }
 
     fn expression_statement(

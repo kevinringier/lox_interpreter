@@ -25,7 +25,10 @@ pub enum Value {
 #[derive(Clone, Debug)]
 pub enum FunctionType {
     BuiltIn(BuiltInFunctionType),
-    UserDefined(ast::Stmt),
+    UserDefined {
+        f: ast::Stmt,
+        closure: Environment<Value>,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -51,21 +54,26 @@ impl Value {
                         Ok(Value::Number(duration_since_epoch.as_secs_f64()))
                     }
                 },
-                FunctionType::UserDefined(stmt) => match stmt {
+                FunctionType::UserDefined { f, closure } => match f {
                     ast::Stmt::Function { params, body, .. } => {
                         let mut env = Environment::<Value>::new();
-                        env.set_enclosing_env(interpreter.globals.clone());
+                        env.set_enclosing_env(Rc::new(RefCell::new(closure.clone())));
                         for (k, v) in izip!(params, args) {
                             env.define(k.clone(), v);
                         }
 
-                        interpreter.execute_block(body, env)?;
-                        Ok(Nil)
+                        match interpreter.execute_block(body, env) {
+                            Ok(_) => Ok(Nil),
+                            Err(e) => match e {
+                                RuntimeError::ReturnSentinel(v) => Ok(v),
+                                _ => Err(e)?,
+                            },
+                        }
                     }
                     _ => panic!("declaration should be a callable type"),
                 },
             },
-            _ => Err(RuntimeError::new(
+            _ => Err(RuntimeError::new_error(
                 span.clone(),
                 "Can only call functions and classes".to_string(),
             )),
@@ -79,12 +87,12 @@ impl Value {
                 FunctionType::BuiltIn(f_type) => match f_type {
                     BuiltInFunctionType::Clock => Ok(0),
                 },
-                FunctionType::UserDefined(stmt) => match stmt {
+                FunctionType::UserDefined { f, closure } => match f {
                     ast::Stmt::Function { params, .. } => Ok(params.len()),
                     _ => panic!("arity can only be invoked on callable type"),
                 },
             },
-            _ => Err(RuntimeError::new(
+            _ => Err(RuntimeError::new_error(
                 span.clone(),
                 "Arity only applies to functions and classes".to_string(),
             )),
@@ -99,7 +107,7 @@ impl Value {
                 FunctionType::BuiltIn(f_type) => match f_type {
                     BuiltInFunctionType::Clock => "<native fn clock>".to_string(),
                 },
-                FunctionType::UserDefined(stmt) => match stmt {
+                FunctionType::UserDefined { f, closure } => match f {
                     ast::Stmt::Function { name, .. } => name.clone(),
                     _ => panic!("arity can only be invoked on callable type"),
                 },
@@ -149,20 +157,29 @@ impl PartialEq for Value {
 impl Eq for Value {}
 
 #[derive(Debug)]
-pub struct RuntimeError {
-    span: span::Span,
-    msg: String,
+pub enum RuntimeError {
+    Error { span: span::Span, msg: String },
+    ReturnSentinel(Value),
 }
 
 impl std::fmt::Display for RuntimeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "RuntimeError: {}, span_info: {}", self.msg, self.span)
+        match self {
+            Self::Error { span, msg } => {
+                write!(f, "RuntimeError: {}, span_info: {}", msg, span)
+            }
+            _ => write!(f, "ReturnSentinel"),
+        }
     }
 }
 
 impl RuntimeError {
-    fn new(span: span::Span, msg: String) -> Self {
-        Self { span, msg }
+    fn new_error(span: span::Span, msg: String) -> Self {
+        Self::Error { span, msg }
+    }
+
+    fn new_return_sentinel(value: Value) -> Self {
+        Self::ReturnSentinel(value)
     }
 }
 
@@ -201,12 +218,26 @@ impl Interpreter {
         let prev_env = std::mem::replace(&mut self.env, Rc::new(RefCell::new(enclosing_env)));
         self.env.borrow_mut().set_enclosing_env(prev_env);
 
+        let n = self.env.borrow().get(&"n".to_string());
+
         for stmt in statements {
-            self.execute(stmt)?;
+            match self.execute(stmt) {
+                Err(e) => match e {
+                    RuntimeError::ReturnSentinel(_) => {
+                        // TODO: without defer, we need to explicitly correct the environment when
+                        // returning using `ReturnSentinel`, or any other error we may continue
+                        // executing.
+                        let prev = self.env.borrow().get_enclosing_env();
+                        self.env = prev;
+
+                        Err(e)?
+                    }
+                    _ => (),
+                },
+                _ => (),
+            }
         }
 
-        // TODO: if we encounter error in executing statements, we will preempt
-        // resetting the env to the parent. We should just exit.
         let prev = self.env.borrow().get_enclosing_env();
         self.env = prev;
 
@@ -242,13 +273,17 @@ impl StmtVisitor<Result<(), RuntimeError>> for Interpreter {
         params: &Vec<String>,
         body: &Vec<ast::Stmt>,
     ) -> Result<(), RuntimeError> {
-        let function = ast::Stmt::Function {
+        let f = ast::Stmt::Function {
             name: name.clone(),
             params: params.clone(),
             body: body.clone(),
         };
 
-        let user_defined_func = Value::Function(FunctionType::UserDefined(function));
+        // TODO: the chapter reuses the same env on self. The next chapter goes over resolution
+        // errors. Make adjustments to agree with next chapter.
+        let closure = self.env.borrow().clone();
+
+        let user_defined_func = Value::Function(FunctionType::UserDefined { f, closure });
 
         self.env
             .borrow_mut()
@@ -281,6 +316,20 @@ impl StmtVisitor<Result<(), RuntimeError>> for Interpreter {
         let value = self.evaluate(expr)?;
         println!("{}", value.stringify());
         Ok(())
+    }
+
+    fn visit_return_statement(
+        &mut self,
+        keyword: &crate::scanner::token::Token,
+        value: &Option<ast::Expr>,
+        span: &span::Span,
+    ) -> Result<(), RuntimeError> {
+        let value = match value {
+            Some(e) => self.evaluate(e)?,
+            _ => Value::Nil,
+        };
+
+        Err(RuntimeError::new_return_sentinel(value))?
     }
 
     fn visit_var_statement(
@@ -322,7 +371,7 @@ impl ExprVisitor<Result<Value, RuntimeError>> for Interpreter {
 
         match self.env.borrow_mut().assign(name.clone(), r_value.clone()) {
             Ok(()) => Ok(r_value),
-            Err(_) => Err(RuntimeError::new(
+            Err(_) => Err(RuntimeError::new_error(
                 span.clone(),
                 format!("Undefined variable '{}'.", name),
             )),
@@ -337,18 +386,18 @@ impl ExprVisitor<Result<Value, RuntimeError>> for Interpreter {
         span: &span::Span,
     ) -> Result<Value, RuntimeError> {
         let (lhs_val, rhs_val) = match (self.visit_expr(lhs), self.visit_expr(rhs)) {
-            (Err(lhs_e), Err(rhs_e)) => Err(RuntimeError::new(
+            (Err(lhs_e), Err(rhs_e)) => Err(RuntimeError::new_error(
                 span.clone(),
                 format!(
                     "bin_op left and right operand error, left error: {}, right error: {}",
                     lhs_e, rhs_e
                 ),
             )),
-            (Err(lhs_e), _) => Err(RuntimeError::new(
+            (Err(lhs_e), _) => Err(RuntimeError::new_error(
                 span.clone(),
                 format!("bin_op left operand error: {}", lhs_e),
             )),
-            (_, Err(rhs_e)) => Err(RuntimeError::new(
+            (_, Err(rhs_e)) => Err(RuntimeError::new_error(
                 span.clone(),
                 format!("bin_op right operand error: {}", rhs_e),
             )),
@@ -371,7 +420,7 @@ impl ExprVisitor<Result<Value, RuntimeError>> for Interpreter {
             (Ne, l, r) => Ok(Bool(l != r)),
             (Sub | Div | Mul | Gt | Ge | Lt | Le, l, r) => {
                 // TODO: add types of lhs_val and rhs_val in error msg
-                Err(RuntimeError::new(
+                Err(RuntimeError::new_error(
                     span.clone(),
                     format!(
                         "operands must be numeric, left operand: {}, right operand: {}",
@@ -379,7 +428,7 @@ impl ExprVisitor<Result<Value, RuntimeError>> for Interpreter {
                     ),
                 ))
             }
-            (Add, l, r) => Err(RuntimeError::new(
+            (Add, l, r) => Err(RuntimeError::new_error(
                 span.clone(),
                 format!(
                     "operands must be numeric or strings, left operand: {}, right operand: {}",
@@ -403,7 +452,7 @@ impl ExprVisitor<Result<Value, RuntimeError>> for Interpreter {
         }
 
         if args.len() != callee.arity(span)? {
-            Err(RuntimeError::new(
+            Err(RuntimeError::new_error(
                 span.clone(),
                 format!(
                     "Expected {} arguments but got {}.",
@@ -478,7 +527,7 @@ impl ExprVisitor<Result<Value, RuntimeError>> for Interpreter {
             (UnOp::Neg, Number(n)) => Ok(Number(-n)),
             (UnOp::Not, val) => Ok(Bool(!val.is_truthy())),
             // TODO: descriptive error msg
-            _ => Err(RuntimeError::new(
+            _ => Err(RuntimeError::new_error(
                 // TODO: add op and operand in error message
                 span.clone(),
                 format!("failed unary operation with operand"),
@@ -488,8 +537,8 @@ impl ExprVisitor<Result<Value, RuntimeError>> for Interpreter {
 
     fn visit_variable(&mut self, name: &String, span: &span::Span) -> Result<Value, RuntimeError> {
         match self.env.borrow().get(name) {
-            Some(v) => Ok(v.clone()),
-            None => Err(RuntimeError::new(
+            Some(v) => Ok(v),
+            None => Err(RuntimeError::new_error(
                 span.clone(),
                 format!("Undefined variable '{}'.", name),
             )),

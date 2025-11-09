@@ -8,8 +8,7 @@ mod span;
 
 use std::process;
 
-// implement return statement
-// implement local functions and closures
+// start resolving and binding
 fn main() -> process::ExitCode {
     let args: Vec<String> = std::env::args().collect();
 
