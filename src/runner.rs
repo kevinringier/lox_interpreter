@@ -1,5 +1,6 @@
 use crate::interpreter::{self, Interpreter};
 use crate::recursive_descent_parser;
+use crate::resolver::Resolver;
 use crate::scanner::Scanner;
 use crate::{ast::AstPrinter, recursive_descent_parser::RecursiveDescentParser};
 
@@ -12,6 +13,7 @@ pub fn run_file(file_name: &str) -> Result<(), RunnerError> {
 
     let mut scanner = Scanner::new();
     let mut interpreter = Interpreter::new();
+    let mut resolver = Resolver::new(&mut interpreter);
     let mut parser = RecursiveDescentParser::new();
 
     let tokens = scanner.scan_tokens(contents.as_bytes());
@@ -19,6 +21,8 @@ pub fn run_file(file_name: &str) -> Result<(), RunnerError> {
 
     let mut ast_printer = AstPrinter::new();
     ast_printer.print(&statements);
+
+    resolver.resolve_statements(&statements);
 
     interpreter.interpret(&statements)?;
 

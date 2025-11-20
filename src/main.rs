@@ -2,13 +2,14 @@ mod ast;
 mod environment;
 mod interpreter;
 mod recursive_descent_parser;
+mod resolver;
 mod runner;
 mod scanner;
 mod span;
 
 use std::process;
 
-// start resolving and binding
+// start resolution errors
 fn main() -> process::ExitCode {
     let args: Vec<String> = std::env::args().collect();
 

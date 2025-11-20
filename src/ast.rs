@@ -14,6 +14,7 @@ pub enum Stmt {
         name: String,
         params: Vec<String>,
         body: Vec<Stmt>,
+        span: span::Span,
     },
     If {
         condition: Expr,
@@ -45,6 +46,7 @@ pub enum Stmt {
 #[derive(Clone, Debug)]
 pub enum Expr {
     Assign {
+        id: usize,
         name: String,
         value: Box<Expr>,
         span: span::Span,
@@ -84,6 +86,7 @@ pub enum Expr {
         span: span::Span,
     },
     Variable {
+        id: usize,
         name: String,
         span: span::Span,
     },
@@ -152,7 +155,12 @@ pub trait StmtVisitor<T> {
         match s {
             Block { statements, span } => self.visit_block_statement(statements, span),
             ExprStmt { inner, span } => self.visit_expr_statement(inner, span),
-            Function { name, params, body } => self.visit_function_statement(name, params, body),
+            Function {
+                name,
+                params,
+                body,
+                span,
+            } => self.visit_function_statement(name, params, body, span),
             If {
                 condition,
                 then,
@@ -187,6 +195,7 @@ pub trait StmtVisitor<T> {
         name: &String,
         params: &Vec<String>,
         body: &Vec<Stmt>,
+        span: &span::Span,
     ) -> T;
 
     fn visit_if_statement(
@@ -221,7 +230,12 @@ pub trait ExprVisitor<T> {
     fn visit_expr(&mut self, e: &Expr) -> T {
         use Expr::*;
         match e {
-            Assign { name, value, span } => self.visit_assignment(name, value, span),
+            Assign {
+                id,
+                name,
+                value,
+                span,
+            } => self.visit_assignment(id, name, value, span),
             Binary { op, lhs, rhs, span } => self.visit_binary(op, lhs, rhs, span),
             Call { callee, args, span } => self.visit_call(callee, args, span),
             Grouping { expr, span } => self.visit_grouping(expr, span),
@@ -229,11 +243,17 @@ pub trait ExprVisitor<T> {
             LogicAnd { left, right, span } => self.visit_logic_and(left, right, span),
             LogicOr { left, right, span } => self.visit_logic_or(left, right, span),
             Unary { op, rhs, span } => self.visit_unary(op, rhs, span),
-            Variable { name, span } => self.visit_variable(name, span),
+            Variable { id, name, span } => self.visit_variable(id, name, span),
         }
     }
 
-    fn visit_assignment(&mut self, name: &String, value: &Box<Expr>, span: &span::Span) -> T;
+    fn visit_assignment(
+        &mut self,
+        id: &usize,
+        name: &String,
+        value: &Box<Expr>,
+        span: &span::Span,
+    ) -> T;
 
     fn visit_binary(
         &mut self,
@@ -255,7 +275,7 @@ pub trait ExprVisitor<T> {
 
     fn visit_unary(&mut self, un_op: &UnOp, rhs: &Box<Expr>, span: &span::Span) -> T;
 
-    fn visit_variable(&mut self, name: &String, span: &span::Span) -> T;
+    fn visit_variable(&mut self, id: &usize, name: &String, span: &span::Span) -> T;
 }
 
 pub struct AstPrinter;
@@ -314,6 +334,7 @@ impl StmtVisitor<String> for AstPrinter {
         name: &String,
         params: &Vec<String>,
         body: &Vec<Stmt>,
+        _: &span::Span,
     ) -> String {
         self.parenthesize(format!("<fn> {}", name).as_str(), vec![])
     }
@@ -369,7 +390,13 @@ impl StmtVisitor<String> for AstPrinter {
 }
 
 impl ExprVisitor<String> for AstPrinter {
-    fn visit_assignment(&mut self, name: &String, value: &Box<Expr>, _: &span::Span) -> String {
+    fn visit_assignment(
+        &mut self,
+        _: &usize,
+        name: &String,
+        value: &Box<Expr>,
+        _: &span::Span,
+    ) -> String {
         self.parenthesize(format!("assignment: {}", name).as_str(), vec![value])
     }
 
@@ -417,7 +444,7 @@ impl ExprVisitor<String> for AstPrinter {
         self.parenthesize(un_op.to_string(), vec![rhs])
     }
 
-    fn visit_variable(&mut self, name: &String, _: &span::Span) -> String {
+    fn visit_variable(&mut self, _: &usize, name: &String, _: &span::Span) -> String {
         self.parenthesize(format!("evaluate var {}", name).as_str(), vec![])
     }
 }

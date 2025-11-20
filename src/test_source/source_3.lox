@@ -1,0 +1,11 @@
+var a = 0;
+{
+  fun showA() {
+      a = a + 1;
+      print a;
+  }
+
+  showA();
+  var a = 0;
+  showA();
+}

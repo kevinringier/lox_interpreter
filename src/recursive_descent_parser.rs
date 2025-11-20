@@ -35,11 +35,20 @@ impl std::fmt::Display for ParseError {
 #[derive(Debug)]
 pub struct RecursiveDescentParser {
     current: usize,
+    id_incrementor: usize,
 }
 
 impl RecursiveDescentParser {
     pub fn new() -> Self {
-        Self { current: 0 }
+        Self {
+            current: 0,
+            id_incrementor: 0,
+        }
+    }
+
+    fn get_new_id(&mut self) -> usize {
+        self.id_incrementor += 1;
+        self.id_incrementor
     }
 
     pub fn parse(&mut self, tokens: &Vec<token::Token>) -> Result<Vec<ast::Stmt>, ParseError> {
@@ -164,7 +173,12 @@ impl RecursiveDescentParser {
 
         let body = self.block(tokens)?;
 
-        Ok(ast::Stmt::Function { name, params, body })
+        Ok(ast::Stmt::Function {
+            name,
+            params,
+            body,
+            span,
+        })
     }
 
     fn statement(&mut self, tokens: &Vec<token::Token>) -> Result<ast::Stmt, ParseError> {
@@ -443,7 +457,8 @@ impl RecursiveDescentParser {
                 let r_value = self.assignment(tokens)?;
 
                 match expr {
-                    Expr::Variable { name, span } => Ok(Expr::Assign {
+                    Expr::Variable { id, name, span } => Ok(Expr::Assign {
+                        id,
                         name: name,
                         value: Box::new(r_value),
                         span: span,
@@ -632,6 +647,7 @@ impl RecursiveDescentParser {
                     span: Span::new(token.clone()),
                 }),
                 Identifier(name) => Ok(Expr::Variable {
+                    id: self.get_new_id(),
                     name: name.clone(),
                     span: Span::new(token.clone()),
                 }),

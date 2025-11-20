@@ -1,5 +1,6 @@
 use std::{
     cell::RefCell,
+    collections::HashMap,
     rc::Rc,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -186,6 +187,7 @@ impl RuntimeError {
 pub struct Interpreter {
     globals: Rc<RefCell<Environment<Value>>>,
     env: Rc<RefCell<Environment<Value>>>,
+    locals: HashMap<usize, usize>,
 }
 
 impl Interpreter {
@@ -195,7 +197,13 @@ impl Interpreter {
         globals.borrow_mut().define("clock".to_string(), clock_func);
 
         let env = Rc::clone(&globals);
-        Self { globals, env }
+
+        let locals = HashMap::new();
+        Self {
+            globals,
+            env,
+            locals,
+        }
     }
 
     pub fn interpret(&mut self, statements: &Vec<ast::Stmt>) -> Result<(), RuntimeError> {
@@ -224,9 +232,8 @@ impl Interpreter {
             match self.execute(stmt) {
                 Err(e) => match e {
                     RuntimeError::ReturnSentinel(_) => {
-                        // TODO: without defer, we need to explicitly correct the environment when
-                        // returning using `ReturnSentinel`, or any other error we may continue
-                        // executing.
+                        // TODO: clean this up using by acquiring a guard and cleaning up these
+                        // resources when the guard goes out of scope to avoid duplication below.
                         let prev = self.env.borrow().get_enclosing_env();
                         self.env = prev;
 
@@ -246,6 +253,21 @@ impl Interpreter {
 
     fn evaluate(&mut self, expr: &ast::Expr) -> Result<Value, RuntimeError> {
         self.visit_expr(expr)
+    }
+
+    pub fn resolve(&mut self, id: usize, depth: usize) {
+        self.locals.insert(id, depth);
+    }
+
+    fn lookup_variable(&self, name: &String, id: &usize) -> Value {
+        if let Some(distance) = self.locals.get(id) {
+            self.env.borrow().get_at(*distance, name)
+        } else {
+            self.globals
+                .borrow()
+                .get(name)
+                .expect("Expect value to exists after lookup")
+        }
     }
 }
 
@@ -272,15 +294,15 @@ impl StmtVisitor<Result<(), RuntimeError>> for Interpreter {
         name: &String,
         params: &Vec<String>,
         body: &Vec<ast::Stmt>,
+        span: &span::Span,
     ) -> Result<(), RuntimeError> {
         let f = ast::Stmt::Function {
             name: name.clone(),
             params: params.clone(),
             body: body.clone(),
+            span: span.clone(),
         };
 
-        // TODO: the chapter reuses the same env on self. The next chapter goes over resolution
-        // errors. Make adjustments to agree with next chapter.
         let closure = self.env.borrow().clone();
 
         let user_defined_func = Value::Function(FunctionType::UserDefined { f, closure });
@@ -363,18 +385,31 @@ impl StmtVisitor<Result<(), RuntimeError>> for Interpreter {
 impl ExprVisitor<Result<Value, RuntimeError>> for Interpreter {
     fn visit_assignment(
         &mut self,
+        id: &usize,
         name: &String,
         value_expr: &Box<ast::Expr>,
         span: &span::Span,
     ) -> Result<Value, RuntimeError> {
         let r_value = self.evaluate(value_expr)?;
 
-        match self.env.borrow_mut().assign(name.clone(), r_value.clone()) {
-            Ok(()) => Ok(r_value),
-            Err(_) => Err(RuntimeError::new_error(
-                span.clone(),
-                format!("Undefined variable '{}'.", name),
-            )),
+        if let Some(distance) = self.locals.get(id) {
+            self.env
+                .borrow_mut()
+                .assign_at(*distance, name, r_value.clone());
+
+            Ok(r_value)
+        } else {
+            match self
+                .globals
+                .borrow_mut()
+                .assign(name.clone(), r_value.clone())
+            {
+                Ok(_) => Ok(r_value),
+                Err(e) => Err(RuntimeError::new_error(
+                    span.clone(),
+                    format!("Undefined variable {}.", name),
+                )),
+            }
         }
     }
 
@@ -535,14 +570,13 @@ impl ExprVisitor<Result<Value, RuntimeError>> for Interpreter {
         }
     }
 
-    fn visit_variable(&mut self, name: &String, span: &span::Span) -> Result<Value, RuntimeError> {
-        match self.env.borrow().get(name) {
-            Some(v) => Ok(v),
-            None => Err(RuntimeError::new_error(
-                span.clone(),
-                format!("Undefined variable '{}'.", name),
-            )),
-        }
+    fn visit_variable(
+        &mut self,
+        id: &usize,
+        name: &String,
+        _: &span::Span,
+    ) -> Result<Value, RuntimeError> {
+        Ok(self.lookup_variable(name, id))
     }
 }
 

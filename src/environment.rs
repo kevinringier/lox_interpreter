@@ -27,6 +27,15 @@ impl<T: Clone> Environment<T> {
         }
     }
 
+    pub fn assign_at(&mut self, distance: usize, key: &String, value: T) {
+        if distance == 0 {
+            self.values.insert(key.clone(), value);
+        } else {
+            let env = self.ancestor(distance);
+            env.borrow_mut().assign_at(0, key, value);
+        }
+    }
+
     pub fn assign(&mut self, key: String, value: T) -> Result<(), EnvironmentError> {
         if self.values.contains_key(&key) {
             self.values.insert(key, value);
@@ -40,6 +49,33 @@ impl<T: Clone> Environment<T> {
 
     pub fn define(&mut self, key: String, value: T) {
         self.values.insert(key, value);
+    }
+
+    fn ancestor(&self, distance: usize) -> Rc<RefCell<Environment<T>>> {
+        match &self.enclosing {
+            Some(enclosing) => {
+                let enclosing_clone = enclosing.clone();
+
+                if distance == 1 {
+                    enclosing_clone
+                } else {
+                    enclosing_clone.borrow().ancestor(distance - 1)
+                }
+            }
+            _ => panic!("we assumed enclosing should exist based on resolver pass"),
+        }
+    }
+
+    pub fn get_at(&self, distance: usize, name: &String) -> T {
+        if distance == 0 {
+            self.values
+                .get(name)
+                .expect("get_at assumes values are available after resolver pass")
+                .clone()
+        } else {
+            let env = self.ancestor(distance);
+            env.borrow().get_at(0, name)
+        }
     }
 
     pub fn get(&self, key: &String) -> Option<T> {
