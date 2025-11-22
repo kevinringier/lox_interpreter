@@ -1,8 +1,8 @@
 use crate::interpreter::{self, Interpreter};
-use crate::recursive_descent_parser;
 use crate::resolver::Resolver;
 use crate::scanner::Scanner;
 use crate::{ast::AstPrinter, recursive_descent_parser::RecursiveDescentParser};
+use crate::{recursive_descent_parser, resolver};
 
 use std::io::{self, Read, Write};
 
@@ -22,7 +22,7 @@ pub fn run_file(file_name: &str) -> Result<(), RunnerError> {
     let mut ast_printer = AstPrinter::new();
     ast_printer.print(&statements);
 
-    resolver.resolve_statements(&statements);
+    resolver.resolve_statements(&statements)?;
 
     interpreter.interpret(&statements)?;
 
@@ -66,6 +66,7 @@ pub fn run_repl() -> Result<(), RunnerError> {
 #[derive(Debug)]
 pub enum RunnerError {
     ParseError(recursive_descent_parser::ParseError),
+    ResolverError(resolver::ResolverError),
     RuntimeError(interpreter::RuntimeError),
     IO(io::Error),
 }
@@ -75,6 +76,7 @@ impl std::fmt::Display for RunnerError {
         use RunnerError::*;
         match self {
             ParseError(e) => write!(f, "{}", e),
+            ResolverError(e) => write!(f, "{}", e),
             RuntimeError(e) => write!(f, "{}", e),
             IO(e) => write!(f, "{}", e),
         }
@@ -84,6 +86,12 @@ impl std::fmt::Display for RunnerError {
 impl From<recursive_descent_parser::ParseError> for RunnerError {
     fn from(value: recursive_descent_parser::ParseError) -> Self {
         RunnerError::ParseError(value)
+    }
+}
+
+impl From<resolver::ResolverError> for RunnerError {
+    fn from(value: resolver::ResolverError) -> Self {
+        RunnerError::ResolverError(value)
     }
 }
 

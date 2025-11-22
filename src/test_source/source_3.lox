@@ -5,7 +5,7 @@ var a = 0;
       print a;
   }
 
-  showA();
-  var a = 0;
-  showA();
+  showA(); // 1
+  var a = 5;
+  showA(); // 2
 }

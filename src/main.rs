@@ -18,7 +18,10 @@ fn main() -> process::ExitCode {
     } else if args.len() == 2 {
         match runner::run_file(&args[1]) {
             Ok(_) => process::ExitCode::SUCCESS,
-            Err(_) => process::ExitCode::from(64),
+            Err(e) => {
+                println!("{}", e);
+                process::ExitCode::from(64)
+            }
         }
     } else {
         match runner::run_repl() {
