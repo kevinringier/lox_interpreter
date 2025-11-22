@@ -6,6 +6,11 @@ pub enum Stmt {
         statements: Vec<Stmt>,
         span: span::Span,
     },
+    Class {
+        name: String,
+        methods: Vec<Stmt>,
+        span: span::Span,
+    },
     ExprStmt {
         inner: Expr,
         span: span::Span,
@@ -154,6 +159,11 @@ pub trait StmtVisitor<T> {
         use Stmt::*;
         match s {
             Block { statements, span } => self.visit_block_statement(statements, span),
+            Class {
+                name,
+                methods,
+                span,
+            } => self.visit_class_statement(name, methods, span),
             ExprStmt { inner, span } => self.visit_expr_statement(inner, span),
             Function {
                 name,
@@ -187,6 +197,9 @@ pub trait StmtVisitor<T> {
     }
 
     fn visit_block_statement(&mut self, statements: &Vec<Stmt>, span: &span::Span) -> T;
+
+    fn visit_class_statement(&mut self, name: &String, methods: &Vec<Stmt>, span: &span::Span)
+    -> T;
 
     fn visit_expr_statement(&mut self, expr: &Expr, span: &span::Span) -> T;
 
@@ -323,6 +336,15 @@ impl StmtVisitor<String> for AstPrinter {
         result.push_str(" )");
 
         result
+    }
+
+    fn visit_class_statement(
+        &mut self,
+        name: &String,
+        methods: &Vec<Stmt>,
+        span: &span::Span,
+    ) -> String {
+        self.parenthesize(format!("<class> {}", name).as_str(), vec![])
     }
 
     fn visit_expr_statement(&mut self, expr: &Expr, _: &span::Span) -> String {

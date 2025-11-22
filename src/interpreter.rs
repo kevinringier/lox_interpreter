@@ -17,6 +17,7 @@ use crate::{
 pub enum Value {
     // Object do we need an object?
     Bool(bool),
+    Class { name: String },
     Function(FunctionType),
     Number(f64),
     String(String),
@@ -88,7 +89,7 @@ impl Value {
                 FunctionType::BuiltIn(f_type) => match f_type {
                     BuiltInFunctionType::Clock => Ok(0),
                 },
-                FunctionType::UserDefined { f, closure } => match f {
+                FunctionType::UserDefined { f, .. } => match f {
                     ast::Stmt::Function { params, .. } => Ok(params.len()),
                     _ => panic!("arity can only be invoked on callable type"),
                 },
@@ -104,11 +105,12 @@ impl Value {
         use Value::*;
         match self {
             Bool(b) => format!("{}", b),
+            Class { name } => format!("class {}", name),
             Function(f_type) => match f_type {
                 FunctionType::BuiltIn(f_type) => match f_type {
                     BuiltInFunctionType::Clock => "<native fn clock>".to_string(),
                 },
-                FunctionType::UserDefined { f, closure } => match f {
+                FunctionType::UserDefined { f, .. } => match f {
                     ast::Stmt::Function { name, .. } => name.clone(),
                     _ => panic!("arity can only be invoked on callable type"),
                 },
@@ -278,6 +280,21 @@ impl StmtVisitor<Result<(), RuntimeError>> for Interpreter {
         _: &span::Span,
     ) -> Result<(), RuntimeError> {
         self.execute_block(statements, Environment::<Value>::new())
+    }
+
+    fn visit_class_statement(
+        &mut self,
+        name: &String,
+        _: &Vec<ast::Stmt>,
+        _: &span::Span,
+    ) -> Result<(), RuntimeError> {
+        self.env.borrow_mut().define(name.clone(), Value::Nil);
+        let class = Value::Class { name: name.clone() };
+        self.env
+            .borrow_mut()
+            .assign(name.clone(), class)
+            .expect("We define the name above, therefore the key should exist");
+        Ok(())
     }
 
     fn visit_expr_statement(

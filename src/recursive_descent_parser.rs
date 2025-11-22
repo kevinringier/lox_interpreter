@@ -71,8 +71,50 @@ impl RecursiveDescentParser {
     fn declaration(&mut self, tokens: &Vec<token::Token>) -> Result<ast::Stmt, ParseError> {
         match self.peek_current(tokens) {
             Some(t) if matches!(t.token_type, TokenType::Var) => self.var_declaration(tokens),
-            Some(t) if matches!(t.token_type, TokenType::Fun) => self.function(tokens, "fun"),
+            Some(t) if matches!(t.token_type, TokenType::Fun) => {
+                self.function(tokens, FunctionType::Function)
+            }
+            Some(t) if matches!(t.token_type, TokenType::Class) => self.class_declaration(tokens),
             _ => self.statement(tokens),
+        }
+    }
+
+    fn class_declaration(&mut self, tokens: &Vec<token::Token>) -> Result<ast::Stmt, ParseError> {
+        let span = span::Span::new(self.consume(TokenType::Class, tokens, "Expect class token")?);
+
+        if let Some(token) = self.advance(tokens) {
+            let name = match &token.token_type {
+                TokenType::Identifier(name) => name.clone(),
+                _ => Err(ParseError::new(Some(token.clone()), "Expect class name"))?,
+            };
+
+            self.consume(
+                TokenType::LeftBrace,
+                tokens,
+                "Expect '{' before class body.",
+            )?;
+
+            let mut methods = vec![];
+            while let Some(_) = match self.peek_current(tokens) {
+                Some(t) if !matches!(t.token_type, TokenType::RightBrace) => Some(t),
+                _ => None,
+            } {
+                methods.push(self.function(tokens, FunctionType::Method)?);
+            }
+
+            self.consume(
+                TokenType::RightBrace,
+                tokens,
+                "Expect '}' after class body.",
+            )?;
+
+            Ok(ast::Stmt::Class {
+                name,
+                methods,
+                span,
+            })
+        } else {
+            Err(ParseError::new(None, "Expect token, got EOF"))
         }
     }
 
@@ -117,10 +159,15 @@ impl RecursiveDescentParser {
     fn function(
         &mut self,
         tokens: &Vec<token::Token>,
-        kind: &str, // TODO: enum
+        function_type: FunctionType, // TODO: enum
     ) -> Result<ast::Stmt, ParseError> {
-        let fun_token = self.consume(TokenType::Fun, tokens, "Expect function token")?;
-        let span = span::Span::new(fun_token);
+        let span: Span;
+        if matches!(function_type, FunctionType::Function) {
+            let fun_token = self.consume(TokenType::Fun, tokens, "Expect function token")?;
+            span = span::Span::new(fun_token);
+        } else {
+            span = span::Span::new(self.peek_current(tokens).expect("").clone());
+        }
 
         let name = self
             .advance(tokens)
@@ -791,6 +838,11 @@ fn match_token_types(token_types: &[TokenType], token: &token::Token) -> bool {
         }
     }
     false
+}
+
+enum FunctionType {
+    Function,
+    Method,
 }
 
 #[cfg(test)]

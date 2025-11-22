@@ -9,7 +9,7 @@ mod span;
 
 use std::process;
 
-// start resolution errors
+// continue at creating instances
 fn main() -> process::ExitCode {
     let args: Vec<String> = std::env::args().collect();
 

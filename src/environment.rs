@@ -6,6 +6,7 @@ pub struct Environment<T> {
     values: std::collections::HashMap<String, T>,
 }
 
+#[derive(Debug)]
 pub struct EnvironmentError;
 
 impl<T: Clone> Environment<T> {

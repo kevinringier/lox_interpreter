@@ -117,7 +117,9 @@ impl StmtVisitor<Result<(), ResolverError>> for Resolver<'_> {
         _: &span::Span,
     ) -> Result<(), ResolverError> {
         self.declare(name.clone())?;
-        initializer.as_ref().map(|i| self.resolve_expression(i));
+        if let Some(init) = initializer.as_ref() {
+            self.resolve_expression(init)?;
+        }
         self.define(name.clone());
         Ok(())
     }
@@ -136,6 +138,17 @@ impl StmtVisitor<Result<(), ResolverError>> for Resolver<'_> {
 
     fn visit_expr_statement(&mut self, expr: &Expr, _: &span::Span) -> Result<(), ResolverError> {
         self.resolve_expression(expr)
+    }
+
+    fn visit_class_statement(
+        &mut self,
+        name: &String,
+        _: &Vec<Stmt>,
+        _: &span::Span,
+    ) -> Result<(), ResolverError> {
+        self.declare(name.clone())?;
+        self.define(name.clone());
+        Ok(())
     }
 
     fn visit_if_statement(
@@ -196,13 +209,15 @@ impl ExprVisitor<Result<(), ResolverError>> for Resolver<'_> {
         name: &String,
         _: &span::Span,
     ) -> Result<(), ResolverError> {
-        self.scopes.last().map(|scope| {
-            scope.get(name.as_str()).map(|v| {
+        if let Some(scope) = self.scopes.last() {
+            if let Some(v) = scope.get(name.as_str()) {
                 if !v {
-                    todo!("refactor and return newly defined resolver error: Can't read local variable in its own initializer");
+                    return Err(ResolverError::new(
+                        "Can't read local variable within its own initializer",
+                    ));
                 }
-            });
-        });
+            }
+        }
 
         self.resolve_local(id, name);
         Ok(())
