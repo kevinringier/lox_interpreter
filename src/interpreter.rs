@@ -17,7 +17,15 @@ use crate::{
 pub enum Value {
     // Object do we need an object?
     Bool(bool),
-    Class { name: String },
+    Class {
+        name: String,
+        // NOTE: `None` variant will be considered a default constructor.
+        constructor: Option<Box<Value>>,
+    },
+    Instance {
+        name: String,
+        class: Box<Value>,
+    },
     Function(FunctionType),
     Number(f64),
     String(String),
@@ -47,6 +55,13 @@ impl Value {
     ) -> Result<Value, RuntimeError> {
         use Value::*;
         match self {
+            Class { name, constructor } => match constructor.as_ref() {
+                None => Ok(Value::Instance {
+                    name: name.clone(),
+                    class: Box::new(self.clone()),
+                }),
+                Some(f) => f.call(interpreter, args, span),
+            },
             Function(f) => match f {
                 FunctionType::BuiltIn(f_type) => match f_type {
                     BuiltInFunctionType::Clock => {
@@ -85,6 +100,10 @@ impl Value {
     fn arity(&self, span: &span::Span) -> Result<usize, RuntimeError> {
         use Value::*;
         match self {
+            Class { constructor, .. } => match constructor {
+                Some(f) => f.arity(span),
+                None => Ok(0),
+            },
             Function(f_type) => match f_type {
                 FunctionType::BuiltIn(f_type) => match f_type {
                     BuiltInFunctionType::Clock => Ok(0),
@@ -105,7 +124,7 @@ impl Value {
         use Value::*;
         match self {
             Bool(b) => format!("{}", b),
-            Class { name } => format!("class {}", name),
+            Class { name, .. } => format!("class {}", name),
             Function(f_type) => match f_type {
                 FunctionType::BuiltIn(f_type) => match f_type {
                     BuiltInFunctionType::Clock => "<native fn clock>".to_string(),
@@ -115,6 +134,7 @@ impl Value {
                     _ => panic!("arity can only be invoked on callable type"),
                 },
             },
+            Instance { name, .. } => format!("<instance> {}", name),
             Number(n) => format!("{}", n).trim_end_matches(".0").to_string(),
             String(s) => s.clone(),
             Nil => format!("nil"),
@@ -289,7 +309,10 @@ impl StmtVisitor<Result<(), RuntimeError>> for Interpreter {
         _: &span::Span,
     ) -> Result<(), RuntimeError> {
         self.env.borrow_mut().define(name.clone(), Value::Nil);
-        let class = Value::Class { name: name.clone() };
+        let class = Value::Class {
+            name: name.clone(),
+            constructor: None,
+        };
         self.env
             .borrow_mut()
             .assign(name.clone(), class)
