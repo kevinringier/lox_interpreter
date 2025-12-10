@@ -1,0 +1,26 @@
+class Cake {
+    init() {
+      this.test = "test string";
+      print this.test;
+      return;
+    }
+
+    test_method() {
+        print "test";
+    }
+
+    taste() {
+        var adjective = "delicious";
+        print "The " + this.flavor + " cake is " + adjective + "!";
+
+    }
+
+}
+
+print Cake();
+var cake = Cake();
+print cake;
+cake.flavor = "German chocolate";
+cake.taste();
+print cake.init();
+print cake;

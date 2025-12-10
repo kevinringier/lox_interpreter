@@ -9,7 +9,6 @@ mod span;
 
 use std::process;
 
-// continue at creating instances
 fn main() -> process::ExitCode {
     let args: Vec<String> = std::env::args().collect();
 

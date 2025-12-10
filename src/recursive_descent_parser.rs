@@ -54,7 +54,7 @@ impl RecursiveDescentParser {
     pub fn parse(&mut self, tokens: &Vec<token::Token>) -> Result<Vec<ast::Stmt>, ParseError> {
         let mut statements = Vec::new();
 
-        while let Some(t) = self.peek_current(tokens) {
+        while let Some(_) = self.peek_current(tokens) {
             match self.declaration(tokens) {
                 Ok(t) => statements.push(t),
                 Err(e) => {
@@ -510,6 +510,15 @@ impl RecursiveDescentParser {
                         value: Box::new(r_value),
                         span: span,
                     }),
+                    Expr::Get { object, name, span } => {
+                        let value = Box::new(r_value);
+                        Ok(Expr::Set {
+                            object,
+                            name,
+                            value,
+                            span,
+                        })
+                    }
                     _ => Err(ParseError::new(
                         Some(t.clone()),
                         "Invalid assignment target.",
@@ -612,11 +621,33 @@ impl RecursiveDescentParser {
         // while it's a '(' and we successfully finished parsing the call, parse another call
         // setting the result of the finished parse as the new (outer most) callee
         while let Some(t) = match self.peek_current(tokens) {
-            Some(t) if matches!(t.token_type, TokenType::LeftParen) => Some(t),
+            Some(t) if matches!(t.token_type, TokenType::LeftParen | TokenType::Dot) => Some(t),
             _ => None,
         } {
-            self.advance(tokens);
-            expr = self.finish_call(expr, tokens)?;
+            if matches!(t.token_type, TokenType::LeftParen) {
+                self.advance(tokens);
+                expr = self.finish_call(expr, tokens)?;
+            } else if matches!(t.token_type, TokenType::Dot) {
+                let span = span::Span::new(self.advance(tokens).unwrap().clone());
+                let name = match self.advance(tokens) {
+                    Some(t) => match &t.token_type {
+                        Identifier(name) => name.clone(),
+                        _ => Err(ParseError::new(
+                            Some(t.clone()),
+                            "Expect property name after '.'.",
+                        ))?,
+                    },
+                    _ => Err(ParseError::new(
+                        None,
+                        "Expect property name after .', got EOF",
+                    ))?,
+                };
+                expr = ast::Expr::Get {
+                    object: Box::new(expr),
+                    name: name,
+                    span: span,
+                }
+            }
         }
 
         Ok(expr)
@@ -697,6 +728,11 @@ impl RecursiveDescentParser {
                     id: self.get_new_id(),
                     name: name.clone(),
                     span: Span::new(token.clone()),
+                }),
+                This => Ok(Expr::This {
+                    id: self.get_new_id(),
+                    keyword: token.lexeme.clone(),
+                    span: span::Span::new(token.clone()),
                 }),
                 LeftParen => {
                     let expr = self.expression(tokens)?;

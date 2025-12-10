@@ -21,13 +21,6 @@ impl<T: Clone> Environment<T> {
         self.enclosing = Some(enclosing);
     }
 
-    pub fn get_enclosing_env(&self) -> Rc<RefCell<Environment<T>>> {
-        match self.enclosing.as_ref() {
-            Some(env) => Rc::clone(&env),
-            None => panic!("Should not call when enclosing is not set."),
-        }
-    }
-
     pub fn assign_at(&mut self, distance: usize, key: &String, value: T) {
         if distance == 0 {
             self.values.insert(key.clone(), value);

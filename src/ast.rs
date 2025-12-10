@@ -32,7 +32,7 @@ pub enum Stmt {
         span: span::Span,
     },
     Return {
-        keyword: Token, // TODO: does this need a token?
+        keyword: Token,
         value: Option<Expr>,
         span: span::Span,
     },
@@ -67,6 +67,11 @@ pub enum Expr {
         args: Vec<Expr>,
         span: span::Span,
     },
+    Get {
+        object: Box<Expr>,
+        name: String,
+        span: span::Span,
+    },
     Grouping {
         expr: Box<Expr>,
         span: span::Span,
@@ -83,6 +88,17 @@ pub enum Expr {
     LogicOr {
         left: Box<Expr>,
         right: Box<Expr>,
+        span: span::Span,
+    },
+    Set {
+        object: Box<Expr>,
+        name: String,
+        value: Box<Expr>,
+        span: span::Span,
+    },
+    This {
+        id: usize,
+        keyword: String,
         span: span::Span,
     },
     Unary {
@@ -251,10 +267,18 @@ pub trait ExprVisitor<T> {
             } => self.visit_assignment(id, name, value, span),
             Binary { op, lhs, rhs, span } => self.visit_binary(op, lhs, rhs, span),
             Call { callee, args, span } => self.visit_call(callee, args, span),
+            Get { object, name, span } => self.visit_get(object, name, span),
             Grouping { expr, span } => self.visit_grouping(expr, span),
             Literal { inner, span } => self.visit_literal(inner, span),
             LogicAnd { left, right, span } => self.visit_logic_and(left, right, span),
             LogicOr { left, right, span } => self.visit_logic_or(left, right, span),
+            Set {
+                object,
+                name,
+                value,
+                span,
+            } => self.visit_set(object, name, value, span),
+            This { id, keyword, span } => self.visit_this(id, keyword, span),
             Unary { op, rhs, span } => self.visit_unary(op, rhs, span),
             Variable { id, name, span } => self.visit_variable(id, name, span),
         }
@@ -278,6 +302,8 @@ pub trait ExprVisitor<T> {
 
     fn visit_call(&mut self, callee: &Expr, args: &Vec<Expr>, span: &span::Span) -> T;
 
+    fn visit_get(&mut self, object: &Box<Expr>, name: &String, span: &span::Span) -> T;
+
     fn visit_grouping(&mut self, expr: &Box<Expr>, span: &span::Span) -> T;
 
     fn visit_literal(&mut self, l: &LitVal, span: &span::Span) -> T;
@@ -285,6 +311,16 @@ pub trait ExprVisitor<T> {
     fn visit_logic_and(&mut self, lhs: &Box<Expr>, rhs: &Box<Expr>, span: &span::Span) -> T;
 
     fn visit_logic_or(&mut self, lhs: &Box<Expr>, rhs: &Box<Expr>, span: &span::Span) -> T;
+
+    fn visit_set(
+        &mut self,
+        object: &Box<Expr>,
+        name: &String,
+        value: &Box<Expr>,
+        span: &span::Span,
+    ) -> T;
+
+    fn visit_this(&mut self, id: &usize, keyword: &String, span: &span::Span) -> T;
 
     fn visit_unary(&mut self, un_op: &UnOp, rhs: &Box<Expr>, span: &span::Span) -> T;
 
@@ -341,8 +377,8 @@ impl StmtVisitor<String> for AstPrinter {
     fn visit_class_statement(
         &mut self,
         name: &String,
-        methods: &Vec<Stmt>,
-        span: &span::Span,
+        _methods: &Vec<Stmt>,
+        _: &span::Span,
     ) -> String {
         self.parenthesize(format!("<class> {}", name).as_str(), vec![])
     }
@@ -354,8 +390,8 @@ impl StmtVisitor<String> for AstPrinter {
     fn visit_function_statement(
         &mut self,
         name: &String,
-        params: &Vec<String>,
-        body: &Vec<Stmt>,
+        _params: &Vec<String>,
+        _: &Vec<Stmt>,
         _: &span::Span,
     ) -> String {
         self.parenthesize(format!("<fn> {}", name).as_str(), vec![])
@@ -363,10 +399,10 @@ impl StmtVisitor<String> for AstPrinter {
 
     fn visit_if_statement(
         &mut self,
-        condition: &Expr,
-        then: &Box<Stmt>,
-        else_branch: &Option<Box<Stmt>>,
-        span: &span::Span,
+        _condition: &Expr,
+        _then: &Box<Stmt>,
+        _else_branch: &Option<Box<Stmt>>,
+        _: &span::Span,
     ) -> String {
         //self.parenthesize("if ", exprs)
         String::from("if") // TODO:
@@ -378,9 +414,9 @@ impl StmtVisitor<String> for AstPrinter {
 
     fn visit_return_statement(
         &mut self,
-        keyword: &Token,
+        _: &Token,
         value: &Option<Expr>,
-        span: &span::Span,
+        _: &span::Span,
     ) -> String {
         let expr = value.as_ref().map(|e| vec![e]).unwrap_or(vec![]);
         self.parenthesize("return", expr)
@@ -397,15 +433,14 @@ impl StmtVisitor<String> for AstPrinter {
             None => vec![],
         };
 
-        // TODO: do we want to print evaluated value?
         self.parenthesize(format!("var statement: {}", name).as_str(), exprs)
     }
 
     fn visit_while_statement(
         &mut self,
-        condition: &Expr,
-        body: &Box<Stmt>,
-        span: &span::Span,
+        _condition: &Expr,
+        _body: &Box<Stmt>,
+        _span: &span::Span,
     ) -> String {
         "while".to_string()
     }
@@ -440,6 +475,10 @@ impl ExprVisitor<String> for AstPrinter {
         )
     }
 
+    fn visit_get(&mut self, object: &Box<Expr>, name: &String, _: &span::Span) -> String {
+        self.parenthesize(format!("get property: {}", name).as_str(), vec![object])
+    }
+
     fn visit_grouping(&mut self, expr: &Box<Expr>, _: &span::Span) -> String {
         self.parenthesize("group", vec![expr])
     }
@@ -460,6 +499,20 @@ impl ExprVisitor<String> for AstPrinter {
 
     fn visit_logic_or(&mut self, lhs: &Box<Expr>, rhs: &Box<Expr>, _: &span::Span) -> String {
         self.parenthesize("or", vec![lhs, rhs])
+    }
+
+    fn visit_set(
+        &mut self,
+        _: &Box<Expr>,
+        name: &String,
+        value: &Box<Expr>,
+        _: &span::Span,
+    ) -> String {
+        self.parenthesize(format!("set {}", name).as_str(), vec![value])
+    }
+
+    fn visit_this(&mut self, _: &usize, keyword: &String, _: &span::Span) -> String {
+        self.parenthesize(format!("this {}", keyword).as_str(), vec![])
     }
 
     fn visit_unary(&mut self, un_op: &UnOp, rhs: &Box<Expr>, _: &span::Span) -> String {

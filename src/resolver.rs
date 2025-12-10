@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::{
-    ast::{Expr, ExprVisitor, Stmt, StmtVisitor},
+    ast::{self, Expr, ExprVisitor, Stmt, StmtVisitor},
     interpreter::Interpreter,
     span,
 };
@@ -10,16 +10,19 @@ pub struct Resolver<'i> {
     scopes: Vec<HashMap<String, bool>>,
     interpreter: &'i mut Interpreter,
     current_function_type: FunctionType,
+    current_class_type: ClassType,
 }
 
 impl<'i> Resolver<'i> {
     pub fn new(interpreter: &'i mut Interpreter) -> Self {
         let scopes = vec![];
         let current_function_type = FunctionType::None;
+        let current_class_type = ClassType::None;
         Self {
             scopes,
             interpreter,
             current_function_type,
+            current_class_type,
         }
     }
 
@@ -143,11 +146,41 @@ impl StmtVisitor<Result<(), ResolverError>> for Resolver<'_> {
     fn visit_class_statement(
         &mut self,
         name: &String,
-        _: &Vec<Stmt>,
+        methods: &Vec<Stmt>,
         _: &span::Span,
     ) -> Result<(), ResolverError> {
+        let enclosing_class_type = self.current_class_type;
+        self.current_class_type = ClassType::Class;
+
         self.declare(name.clone())?;
         self.define(name.clone());
+
+        self.begin_scope();
+        if let Some(scope) = self.scopes.last_mut() {
+            scope.insert("this".to_string(), true);
+        }
+
+        for method in methods {
+            match method {
+                Stmt::Function {
+                    name, params, body, ..
+                } => {
+                    let function_type = if name == "init" {
+                        FunctionType::Initializer
+                    } else {
+                        FunctionType::Method
+                    };
+
+                    self.resolve_function(params, body, function_type)?
+                }
+                _ => panic!("Parsed a non-function type where a method was expected "),
+            };
+        }
+
+        self.end_scope();
+
+        self.current_class_type = enclosing_class_type;
+
         Ok(())
     }
 
@@ -182,8 +215,15 @@ impl StmtVisitor<Result<(), ResolverError>> for Resolver<'_> {
         if self.current_function_type == FunctionType::None {
             Err(ResolverError::new("Can't return from top-level code."))?;
         }
+
         match value.as_ref() {
             Some(expr) => {
+                if self.current_function_type == FunctionType::Initializer {
+                    Err(ResolverError::new(
+                        "Can't return a value from an initializer.",
+                    ))?
+                }
+
                 self.resolve_expression(expr)?;
             }
             _ => (),
@@ -237,7 +277,7 @@ impl ExprVisitor<Result<(), ResolverError>> for Resolver<'_> {
 
     fn visit_binary(
         &mut self,
-        _: &crate::ast::BinOp,
+        _: &ast::BinOp,
         lhs: &Box<Expr>,
         rhs: &Box<Expr>,
         _: &span::Span,
@@ -259,15 +299,20 @@ impl ExprVisitor<Result<(), ResolverError>> for Resolver<'_> {
         Ok(())
     }
 
+    fn visit_get(
+        &mut self,
+        object: &Box<Expr>,
+        _: &String,
+        _: &span::Span,
+    ) -> Result<(), ResolverError> {
+        self.resolve_expression(object)
+    }
+
     fn visit_grouping(&mut self, expr: &Box<Expr>, _: &span::Span) -> Result<(), ResolverError> {
         self.resolve_expression(expr)
     }
 
-    fn visit_literal(
-        &mut self,
-        _: &crate::ast::LitVal,
-        _: &span::Span,
-    ) -> Result<(), ResolverError> {
+    fn visit_literal(&mut self, _: &ast::LitVal, _: &span::Span) -> Result<(), ResolverError> {
         Ok(())
     }
 
@@ -291,9 +336,34 @@ impl ExprVisitor<Result<(), ResolverError>> for Resolver<'_> {
         self.resolve_expression(rhs)
     }
 
+    fn visit_set(
+        &mut self,
+        object: &Box<Expr>,
+        _: &String,
+        value: &Box<Expr>,
+        _: &span::Span,
+    ) -> Result<(), ResolverError> {
+        self.resolve_expression(object)?;
+        self.resolve_expression(value)
+    }
+
+    fn visit_this(
+        &mut self,
+        id: &usize,
+        keyword: &String,
+        _: &span::Span,
+    ) -> Result<(), ResolverError> {
+        if self.current_class_type == ClassType::None {
+            Err(ResolverError::new("Can't use 'this' outside of a class."))
+        } else {
+            self.resolve_local(id, keyword);
+            Ok(())
+        }
+    }
+
     fn visit_unary(
         &mut self,
-        _: &crate::ast::UnOp,
+        _: &ast::UnOp,
         rhs: &Box<Expr>,
         _: &span::Span,
     ) -> Result<(), ResolverError> {
@@ -305,6 +375,14 @@ impl ExprVisitor<Result<(), ResolverError>> for Resolver<'_> {
 enum FunctionType {
     None,
     Function,
+    Initializer,
+    Method,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq)]
+enum ClassType {
+    None,
+    Class,
 }
 
 #[derive(Debug)]
