@@ -21,6 +21,10 @@ impl<T: Clone> Environment<T> {
         self.enclosing = Some(enclosing);
     }
 
+    pub fn is_enclosed(&self) -> bool {
+        self.enclosing.is_some()
+    }
+
     pub fn assign_at(&mut self, distance: usize, key: &String, value: T) {
         if distance == 0 {
             self.values.insert(key.clone(), value);

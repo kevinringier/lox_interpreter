@@ -319,7 +319,7 @@ impl Interpreter {
 
         // NOTE: Functions and Methods have an enclosing environment on the incoming enclosing_env arguments. We don't want to
         // set it to the current environment.
-        if self.env.borrow().enclosing.is_none() {
+        if !self.env.borrow().is_enclosed() {
             self.env.borrow_mut().set_enclosing_env(prev_env.clone());
         }
 
