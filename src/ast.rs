@@ -8,6 +8,7 @@ pub enum Stmt {
     },
     Class {
         name: String,
+        superclass: Option<Expr>,
         methods: Vec<Stmt>,
         span: span::Span,
     },
@@ -96,6 +97,12 @@ pub enum Expr {
         value: Box<Expr>,
         span: span::Span,
     },
+    Super {
+        id: usize,
+        keyword: String,
+        method_name: String,
+        span: span::Span,
+    },
     This {
         id: usize,
         keyword: String,
@@ -177,9 +184,10 @@ pub trait StmtVisitor<T> {
             Block { statements, span } => self.visit_block_statement(statements, span),
             Class {
                 name,
+                superclass,
                 methods,
                 span,
-            } => self.visit_class_statement(name, methods, span),
+            } => self.visit_class_statement(name, superclass, methods, span),
             ExprStmt { inner, span } => self.visit_expr_statement(inner, span),
             Function {
                 name,
@@ -214,8 +222,13 @@ pub trait StmtVisitor<T> {
 
     fn visit_block_statement(&mut self, statements: &Vec<Stmt>, span: &span::Span) -> T;
 
-    fn visit_class_statement(&mut self, name: &String, methods: &Vec<Stmt>, span: &span::Span)
-    -> T;
+    fn visit_class_statement(
+        &mut self,
+        name: &String,
+        superclass: &Option<Expr>,
+        methods: &Vec<Stmt>,
+        span: &span::Span,
+    ) -> T;
 
     fn visit_expr_statement(&mut self, expr: &Expr, span: &span::Span) -> T;
 
@@ -278,6 +291,12 @@ pub trait ExprVisitor<T> {
                 value,
                 span,
             } => self.visit_set(object, name, value, span),
+            Super {
+                id,
+                keyword,
+                method_name,
+                span,
+            } => self.visit_super(id, keyword, method_name, span),
             This { id, keyword, span } => self.visit_this(id, keyword, span),
             Unary { op, rhs, span } => self.visit_unary(op, rhs, span),
             Variable { id, name, span } => self.visit_variable(id, name, span),
@@ -317,6 +336,14 @@ pub trait ExprVisitor<T> {
         object: &Box<Expr>,
         name: &String,
         value: &Box<Expr>,
+        span: &span::Span,
+    ) -> T;
+
+    fn visit_super(
+        &mut self,
+        id: &usize,
+        keyword: &String,
+        method_name: &String,
         span: &span::Span,
     ) -> T;
 
@@ -377,6 +404,7 @@ impl StmtVisitor<String> for AstPrinter {
     fn visit_class_statement(
         &mut self,
         name: &String,
+        _superclass: &Option<Expr>,
         _methods: &Vec<Stmt>,
         _: &span::Span,
     ) -> String {
@@ -509,6 +537,16 @@ impl ExprVisitor<String> for AstPrinter {
         _: &span::Span,
     ) -> String {
         self.parenthesize(format!("set {}", name).as_str(), vec![value])
+    }
+
+    fn visit_super(
+        &mut self,
+        _: &usize,
+        _: &String,
+        method_name: &String,
+        _: &span::Span,
+    ) -> String {
+        self.parenthesize(format!("super {}", method_name).as_str(), vec![])
     }
 
     fn visit_this(&mut self, _: &usize, keyword: &String, _: &span::Span) -> String {

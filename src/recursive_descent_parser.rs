@@ -88,6 +88,24 @@ impl RecursiveDescentParser {
                 _ => Err(ParseError::new(Some(token.clone()), "Expect class name"))?,
             };
 
+            let superclass = match self.peek_current(tokens) {
+                Some(t) if matches!(t.token_type, TokenType::Less) => {
+                    self.advance(tokens);
+                    match self.advance(tokens) {
+                        Some(t) => match &t.token_type {
+                            TokenType::Identifier(superclass) => Some(Expr::Variable {
+                                id: self.get_new_id(),
+                                name: superclass.clone(),
+                                span: span::Span::new(t.clone()),
+                            }),
+                            _ => Err(ParseError::new(Some(t.clone()), "Expect super class name."))?,
+                        },
+                        _ => Err(ParseError::new(None, "Expect super class name, got EOF."))?,
+                    }
+                }
+                _ => None,
+            };
+
             self.consume(
                 TokenType::LeftBrace,
                 tokens,
@@ -110,6 +128,7 @@ impl RecursiveDescentParser {
 
             Ok(ast::Stmt::Class {
                 name,
+                superclass,
                 methods,
                 span,
             })
@@ -729,6 +748,32 @@ impl RecursiveDescentParser {
                     name: name.clone(),
                     span: Span::new(token.clone()),
                 }),
+                Super => {
+                    self.consume(TokenType::Dot, tokens, "Expect '.' after 'super'.")?;
+
+                    let method = match self.advance(tokens) {
+                        Some(t) => match &t.token_type {
+                            Identifier(name) => name.clone(),
+                            _ => Err(ParseError::new(
+                                Some(t.clone()),
+                                "Expect superclass method name.",
+                            ))?,
+                        },
+                        _ => Err(ParseError::new(
+                            None,
+                            "Expect method name after super, got EOF.",
+                        ))?,
+                    };
+                    let id = self.get_new_id();
+                    let span = span::Span::new(token.clone());
+
+                    Ok(Expr::Super {
+                        id,
+                        keyword: token.lexeme.clone(),
+                        method_name: method,
+                        span,
+                    })
+                }
                 This => Ok(Expr::This {
                     id: self.get_new_id(),
                     keyword: token.lexeme.clone(),

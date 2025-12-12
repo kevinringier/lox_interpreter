@@ -146,6 +146,7 @@ impl StmtVisitor<Result<(), ResolverError>> for Resolver<'_> {
     fn visit_class_statement(
         &mut self,
         name: &String,
+        superclass: &Option<Expr>,
         methods: &Vec<Stmt>,
         _: &span::Span,
     ) -> Result<(), ResolverError> {
@@ -154,6 +155,25 @@ impl StmtVisitor<Result<(), ResolverError>> for Resolver<'_> {
 
         self.declare(name.clone())?;
         self.define(name.clone());
+
+        if let Some(sc) = superclass {
+            self.current_class_type = ClassType::SubClass;
+            let class_name = name;
+            match sc {
+                Expr::Variable { name, .. } => {
+                    if class_name == name {
+                        Err(ResolverError::new("A class can't inherit from itself."))?
+                    }
+                    self.resolve_expression(sc)?;
+                }
+                _ => panic!("Expected an expression variable, got non-expression variable"),
+            }
+
+            self.begin_scope();
+            if let Some(scope) = self.scopes.last_mut() {
+                scope.insert("super".to_string(), true);
+            }
+        }
 
         self.begin_scope();
         if let Some(scope) = self.scopes.last_mut() {
@@ -178,6 +198,10 @@ impl StmtVisitor<Result<(), ResolverError>> for Resolver<'_> {
         }
 
         self.end_scope();
+
+        if superclass.is_some() {
+            self.end_scope();
+        }
 
         self.current_class_type = enclosing_class_type;
 
@@ -347,6 +371,25 @@ impl ExprVisitor<Result<(), ResolverError>> for Resolver<'_> {
         self.resolve_expression(value)
     }
 
+    fn visit_super(
+        &mut self,
+        id: &usize,
+        keyword: &String,
+        _: &String,
+        _: &span::Span,
+    ) -> Result<(), ResolverError> {
+        if self.current_class_type == ClassType::None {
+            Err(ResolverError::new("Can't user 'super' outside of a class."))?
+        } else if self.current_class_type != ClassType::SubClass {
+            Err(ResolverError::new(
+                "Can't use 'super' in a class with no superclass.",
+            ))?
+        }
+
+        self.resolve_local(id, keyword);
+        Ok(())
+    }
+
     fn visit_this(
         &mut self,
         id: &usize,
@@ -383,6 +426,7 @@ enum FunctionType {
 enum ClassType {
     None,
     Class,
+    SubClass,
 }
 
 #[derive(Debug)]

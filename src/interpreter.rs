@@ -19,13 +19,14 @@ pub enum Value {
     Bool(bool),
     Class {
         name: String,
+        superclass: Option<Rc<RefCell<Value>>>,
         // NOTE: `None` variant will be considered a default constructor.
         constructor: Option<Rc<RefCell<Value>>>,
         methods: HashMap<String, Rc<RefCell<Value>>>,
     },
     Instance {
         name: String,
-        class: Box<Rc<RefCell<Value>>>,
+        class: Rc<RefCell<Value>>,
         fields: HashMap<String, Rc<RefCell<Value>>>,
     },
     Function(FunctionType),
@@ -63,7 +64,7 @@ impl Value {
             } => {
                 let instance = Rc::new(RefCell::new(Value::Instance {
                     name: name.clone(),
-                    class: Box::new(value.clone()),
+                    class: value.clone(),
                     fields: HashMap::new(),
                 }));
                 match constructor.as_ref() {
@@ -147,17 +148,31 @@ impl Value {
         }
     }
 
-    fn find_method(class: &Box<Rc<RefCell<Value>>>, name: &String) -> Option<Rc<RefCell<Value>>> {
+    fn find_method(class: Rc<RefCell<Value>>, name: &String) -> Option<Rc<RefCell<Value>>> {
         match &*class.borrow() {
             Value::Class {
+                superclass,
                 methods,
                 constructor,
                 ..
             } => {
                 if name == "init" && constructor.is_some() {
                     Some(constructor.as_ref().unwrap().clone())
-                } else {
+                } else if methods.contains_key(name) {
                     methods.get(name).map(|method| method.clone())
+                } else if let Some(superclass) = superclass {
+                    match *superclass.borrow() {
+                        Value::Class { ref methods, .. } => {
+                            if methods.contains_key(name) {
+                                Some(methods.get(name).unwrap().clone())
+                            } else {
+                                None
+                            }
+                        }
+                        _ => panic!("Should be a class."),
+                    }
+                } else {
+                    None
                 }
             }
             _ => panic!("Attempted to find method on a non-class type"),
@@ -375,12 +390,38 @@ impl StmtVisitor<Result<(), RuntimeError>> for Interpreter {
     fn visit_class_statement(
         &mut self,
         name: &String,
+        superclass: &Option<ast::Expr>,
         methods: &Vec<ast::Stmt>,
         span: &span::Span,
     ) -> Result<(), RuntimeError> {
+        let superclass_value = if let Some(sc) = superclass {
+            let class = self.evaluate(sc)?;
+
+            match *class.borrow() {
+                Value::Class { .. } => Some(class.clone()),
+                _ => Err(RuntimeError::new_error(
+                    span.clone(),
+                    "Superclass must be a class.".to_string(),
+                ))?,
+            }
+        } else {
+            None
+        };
+
         self.env
             .borrow_mut()
             .define(name.clone(), Rc::new(RefCell::new(Value::Nil)));
+
+        let prev_env = if let Some(ref sc) = superclass_value {
+            let mut super_env = Environment::new();
+            super_env.define("super".to_string(), sc.clone());
+
+            let prev_env = std::mem::replace(&mut self.env, Rc::new(RefCell::new(super_env)));
+            self.env.borrow_mut().set_enclosing_env(prev_env.clone());
+            Some(prev_env)
+        } else {
+            None
+        };
 
         let mut class_methods = HashMap::new();
         let mut user_defined_constructor = None;
@@ -412,9 +453,14 @@ impl StmtVisitor<Result<(), RuntimeError>> for Interpreter {
 
         let class = Value::Class {
             name: name.clone(),
+            superclass: superclass_value,
             constructor: user_defined_constructor,
             methods: class_methods,
         };
+
+        if let Some(prev_env) = prev_env {
+            self.env = prev_env;
+        }
 
         self.env
             .borrow_mut()
@@ -661,7 +707,7 @@ impl ExprVisitor<Result<Rc<RefCell<Value>>, RuntimeError>> for Interpreter {
             Value::Instance { fields, class, .. } => {
                 if let Some(field) = fields.get(name) {
                     Ok(field.clone())
-                } else if let Some(method) = Value::find_method(class, name) {
+                } else if let Some(method) = Value::find_method(class.clone(), name) {
                     Ok(Value::bind(method.clone(), value.clone()))
                 } else {
                     Err(RuntimeError::new_error(
@@ -748,6 +794,31 @@ impl ExprVisitor<Result<Rc<RefCell<Value>>, RuntimeError>> for Interpreter {
                 span.clone(),
                 "Only instances have fields.".to_string(),
             )),
+        }
+    }
+
+    fn visit_super(
+        &mut self,
+        id: &usize,
+        keyword: &String,
+        method_name: &String,
+        span: &span::Span,
+    ) -> Result<Rc<RefCell<Value>>, RuntimeError> {
+        let distance = self
+            .locals
+            .get(id)
+            .expect("Resolved a local super but couldn't find");
+
+        let superclass = self.env.borrow().get_at(*distance, &keyword);
+        let object = self.env.borrow().get_at(distance - 1, &"this".to_string());
+
+        if let Some(method) = Value::find_method(superclass, method_name) {
+            Ok(Value::bind(method, object))
+        } else {
+            Err(RuntimeError::new_error(
+                span.clone(),
+                format!("Undefined property {} on superclass.", method_name),
+            ))?
         }
     }
 
